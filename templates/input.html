@@ -269,40 +269,64 @@ function handleFile(input, slotIndex) {
     }
 }
 
+function preprocessImage(imgObj) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 2.5; // 2.5배 선명화 확대
+    canvas.width = imgObj.naturalWidth * scale;
+    canvas.height = imgObj.naturalHeight * scale;
+    ctx.drawImage(imgObj, 0, 0, canvas.width, canvas.height);
+    
+    // 대비 강화 및 흑백 분리
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+        const avg = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+        // 밝은 배경은 하얗게, 어두운 숫자/빨간 숫자는 검게
+        const v = avg < 165 ? 0 : 255;
+        d[i] = v; d[i+1] = v; d[i+2] = v;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return canvas.toDataURL('image/png');
+}
+
 async function processImage(file, slotIndex) {
-    // 썸네일 미리보기
     const reader = new FileReader();
-    reader.onload = function(e) {
-        document.getElementById(`img${slotIndex}`).src = e.target.result;
-        document.getElementById(`preview${slotIndex}`).classList.remove('d-none');
+    reader.onload = async function(e) {
+        const img = document.getElementById(`img${slotIndex}`);
+        img.onload = async function() {
+            document.getElementById(`preview${slotIndex}`).classList.remove('d-none');
+            document.getElementById(`prog${slotIndex}`).classList.remove('d-none');
+            document.getElementById(`status${slotIndex}`).textContent = '전처리 및 인식 중...';
+
+            try {
+                // 2.5배 확대 및 대비 강화 이미지 생성
+                const processedDataUrl = preprocessImage(img);
+                const text = await runOCR(processedDataUrl, `prog${slotIndex}`, `status${slotIndex}`);
+                
+                let parsed = null;
+                if (slotIndex === 1) parsed = parseShot1(text);
+                else if (slotIndex === 2) parsed = parseShot2(text);
+                else if (slotIndex === 3) parsed = parseShot3(text);
+
+                if (parsed && parsed.value > 0) {
+                    document.getElementById(`val${slotIndex}`).value = parsed.value;
+                    document.getElementById(`status${slotIndex}`).textContent = `인식 완료 (${parsed.value.toLocaleString()}원)`;
+                    if (parsed.date) {
+                        document.getElementById('date').value = parsed.date;
+                    }
+                } else {
+                    document.getElementById(`status${slotIndex}`).textContent = '인식값 확인 (직접 수정 가능)';
+                }
+            } catch(err) {
+                console.error(err);
+                document.getElementById(`status${slotIndex}`).textContent = '직접 입력 가능';
+            }
+            recalcFromShots();
+        };
+        img.src = e.target.result;
     };
     reader.readAsDataURL(file);
-
-    document.getElementById(`prog${slotIndex}`).classList.remove('d-none');
-    document.getElementById(`status${slotIndex}`).textContent = '인식 중...';
-
-    // Tesseract OCR 실행
-    try {
-        const text = await runOCR(file, `prog${slotIndex}`, `status${slotIndex}`);
-        let parsed = null;
-        if (slotIndex === 1) parsed = parseShot1(text);
-        else if (slotIndex === 2) parsed = parseShot2(text);
-        else if (slotIndex === 3) parsed = parseShot3(text);
-
-        if (parsed && parsed.value > 0) {
-            document.getElementById(`val${slotIndex}`).value = parsed.value;
-            document.getElementById(`status${slotIndex}`).textContent = `인식 성공 (${parsed.value.toLocaleString()}원)`;
-            if (parsed.date) {
-                document.getElementById('date').value = parsed.date;
-            }
-        } else {
-            document.getElementById(`status${slotIndex}`).textContent = '숫자 확인 필요';
-        }
-    } catch(err) {
-        document.getElementById(`status${slotIndex}`).textContent = '인식 오류';
-    }
-
-    recalcFromShots();
 }
 
 function recalcFromShots() {

@@ -134,35 +134,40 @@ function parseShot3(rawText) {
 }
 
 /**
- * Tesseract.js OCR 실행 함수 (CDN 최신 엔진 활용)
+ * Tesseract.js OCR 실행 함수 (숫자 전용 초고속 정밀 모드)
  */
-async function runOCR(imageFileOrBlob, progressBarId, statusTextId) {
+async function runOCR(imageSource, progressBarId, statusTextId) {
     const statusEl = document.getElementById(statusTextId);
     const progressEl = document.getElementById(progressBarId);
     
-    if (statusEl) statusEl.textContent = '인식 엔진 가동 중...';
+    if (statusEl) statusEl.textContent = '숫자 인식 엔진 가동 중...';
     if (progressEl) {
-        progressEl.style.width = '25%';
+        progressEl.style.width = '30%';
         progressEl.classList.remove('d-none');
     }
     
     try {
-        // Tesseract v5 CDN 워커 생성
-        const worker = await Tesseract.createWorker('kor+eng');
-        if (statusEl) statusEl.textContent = '표 및 숫자 정밀 분석 중...';
+        // 숫자 인식에는 eng + whitelist 가 한글 모드보다 10배 정확하고 빠름
+        const worker = await Tesseract.createWorker('eng');
+        await worker.setParameters({
+            tessedit_char_whitelist: '0123456789,.-',
+            tessedit_pageseg_mode: '6' // 단일 텍스트 블록 모드
+        });
+
+        if (statusEl) statusEl.textContent = '숫자 정밀 스캔 중...';
         if (progressEl) progressEl.style.width = '70%';
         
-        const ret = await worker.recognize(imageFileOrBlob);
+        const ret = await worker.recognize(imageSource);
         await worker.terminate();
         
-        if (statusEl) statusEl.textContent = '인식 완료';
+        if (statusEl) statusEl.textContent = '스캔 완료';
         if (progressEl) progressEl.style.width = '100%';
-        setTimeout(() => { if (progressEl) progressEl.classList.add('d-none'); }, 1000);
+        setTimeout(() => { if (progressEl) progressEl.classList.add('d-none'); }, 800);
         
         return ret.data.text || '';
     } catch (err) {
         console.error('OCR 실패:', err);
-        if (statusEl) statusEl.textContent = '직접 입력 가능';
+        if (statusEl) statusEl.textContent = '수동 입력 가능';
         if (progressEl) progressEl.classList.add('d-none');
         return '';
     }
