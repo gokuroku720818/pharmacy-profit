@@ -376,7 +376,7 @@ def get_all_users_stats():
             COALESCE(SUM(d.total), 0) as total_profit
         FROM users u
         LEFT JOIN daily_profit d ON u.id = d.user_id
-        GROUP BY u.id
+        GROUP BY u.id, u.username, u.pharmacy_name, u.created_at
         ORDER BY u.id ASC
     ''').fetchall()
     conn.close()

@@ -90,7 +90,7 @@
                             {% endif %}
                         </td>
                         <td><code>{{ u.username }}</code></td>
-                        <td class="text-muted small">{{ u.created_at[:10] if u.created_at else '-' }}</td>
+                        <td class="text-muted small">{{ (u.created_at|string)[:10] if u.created_at else '-' }}</td>
                         <td class="text-center">
                             <span class="badge {% if u.total_entries > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
                                 {{ u.total_entries }}일

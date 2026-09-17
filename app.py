@@ -880,20 +880,23 @@ def upload_excel():
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
-    # 원래 관리자로 스위칭 복귀가 필요한 상태인지 확인
-    users = get_all_users_stats()
-    
-    total_users = len(users)
-    total_records = sum(u['total_entries'] for u in users)
-    total_profit = sum(u['total_profit'] for u in users)
-    
-    return render_template(
-        'admin.html',
-        users=users,
-        total_users=total_users,
-        total_records=total_records,
-        total_profit=total_profit
-    )
+    try:
+        users = get_all_users_stats()
+        
+        total_users = len(users)
+        total_records = sum(int(u['total_entries'] or 0) for u in users)
+        total_profit = sum(int(u['total_profit'] or 0) for u in users)
+        
+        return render_template(
+            'admin.html',
+            users=users,
+            total_users=total_users,
+            total_records=total_records,
+            total_profit=total_profit
+        )
+    except Exception as e:
+        flash(f'관리자 콘솔 로딩 중 오류: {str(e)}', 'danger')
+        return redirect(url_for('dashboard'))
 
 
 @app.route('/admin/switch_user/<int:target_user_id>')
