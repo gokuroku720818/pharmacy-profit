@@ -1,0 +1,121 @@
+/* 매출 관리 시스템 스타일 */
+
+:root {
+    --primary: #0d6efd;
+    --success: #198754;
+    --info: #0dcaf0;
+    --warning: #ffc107;
+    --danger: #dc3545;
+}
+
+body {
+    background-color: #f5f7fa;
+    font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+}
+
+.navbar-brand {
+    font-weight: 700;
+    font-size: 1.3rem;
+}
+
+/* 요약 카드 */
+.summary-card {
+    border: none;
+    border-radius: 12px;
+    transition: transform 0.2s;
+    overflow: hidden;
+}
+
+.summary-card:hover {
+    transform: translateY(-4px);
+}
+
+.summary-card .card-body {
+    padding: 1.5rem;
+    position: relative;
+}
+
+.summary-card .card-icon {
+    font-size: 2.5rem;
+    opacity: 0.3;
+    position: absolute;
+    right: 1rem;
+    top: 1rem;
+}
+
+.summary-card .card-subtitle {
+    font-size: 0.85rem;
+    opacity: 0.9;
+    margin-bottom: 0.5rem;
+}
+
+.summary-card .card-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 0;
+}
+
+/* 카드 */
+.card {
+    border: none;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+
+.card-header {
+    background-color: #fff;
+    border-bottom: 1px solid #eee;
+    font-weight: 600;
+    padding: 1rem 1.25rem;
+}
+
+/* 테이블 */
+.table th {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.table td {
+    vertical-align: middle;
+}
+
+/* 히트맵 */
+.heatmap-table td {
+    font-size: 0.8rem;
+    padding: 0.5rem 0.25rem;
+    min-width: 60px;
+}
+
+.heatmap-cell {
+    border-radius: 4px;
+}
+
+/* 폼 */
+.form-control:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.15);
+}
+
+/* 반응형 */
+@media (max-width: 768px) {
+    .summary-card .card-title {
+        font-size: 1rem;
+    }
+    .summary-card .card-icon {
+        font-size: 1.5rem;
+    }
+}
+
+/* 차트 컨테이너 */
+.card-body canvas {
+    max-height: 400px;
+}
+
+/* 알림 */
+.alert {
+    border-radius: 8px;
+}
+
+footer {
+    color: #aaa;
+}

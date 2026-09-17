@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}트렌드 분석 - 약국 순익 관리{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="fas fa-chart-bar"></i> 트렌드 분석</h2>
+
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-calendar-alt"></i> 연도별 월 순익 비교
+            </div>
+            <div class="card-body">
+                <canvas id="yearlyCompareChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-calendar-week"></i> 요일별 평균 순익
+            </div>
+            <div class="card-body">
+                <canvas id="dayOfWeekChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-percentage"></i> 월별 성장률
+            </div>
+            <div class="card-body">
+                <canvas id="growthRateChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-th"></i> 월별 순익 히트맵
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-bordered text-center heatmap-table">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>연도</th>
+                                {% for m in range(1, 13) %}
+                                <th>{{ m }}월</th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for year_data in heatmap_data %}
+                            <tr>
+                                <td><strong>{{ year_data.year }}</strong></td>
+                                {% for val in year_data.months %}
+                                <td class="heatmap-cell" style="background-color: {{ val.color }}; color: {{ val.text_color }};">
+                                    {% if val.value > 0 %}
+                                    {{ (val.value / 10000)|round|int }}만
+                                    {% else %}
+                                    -
+                                    {% endif %}
+                                </td>
+                                {% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const yearlyData = {{ yearly_data|tojson }};
+    const dayOfWeekData = {{ day_of_week_data|tojson }};
+    const growthData = {{ growth_data|tojson }};
+    initTrendCharts(yearlyData, dayOfWeekData, growthData);
+</script>
+{% endblock %}

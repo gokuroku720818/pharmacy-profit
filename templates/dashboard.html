@@ -1,0 +1,211 @@
+{% extends 'base.html' %}
+{% block title %}대시보드 - 약국 순익 관리{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="fas fa-tachometer-alt"></i> 대시보드 <small class="text-muted">{{ current_month.year }}년 {{ current_month.month }}월</small></h2>
+
+<!-- 요약 카드 -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card summary-card bg-primary text-white">
+            <div class="card-body">
+                <div class="card-icon"><i class="fas fa-prescription-bottle-alt"></i></div>
+                <h6 class="card-subtitle">조제+일매순익</h6>
+                <h3 class="card-title">{{ "{:,}".format(current_month.dispensing_plus_daily|default(0)) }}원</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card summary-card bg-success text-white">
+            <div class="card-body">
+                <div class="card-icon"><i class="fas fa-pills"></i></div>
+                <h6 class="card-subtitle">비보험약가차액</h6>
+                <h3 class="card-title">{{ "{:,}".format(current_month.non_insurance|default(0)) }}원</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card summary-card bg-info text-white">
+            <div class="card-body">
+                <div class="card-icon"><i class="fas fa-coins"></i></div>
+                <h6 class="card-subtitle">전체 합계</h6>
+                <h3 class="card-title">{{ "{:,}".format(current_month.grand_total|default(0)) }}원</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card summary-card {% if (current_month.diff|default(0)) >= 0 %}bg-warning{% else %}bg-danger{% endif %} text-white">
+            <div class="card-body">
+                <div class="card-icon">
+                    <i class="fas {% if (current_month.diff|default(0)) >= 0 %}fa-arrow-up{% else %}fa-arrow-down{% endif %}"></i>
+                </div>
+                <h6 class="card-subtitle">전월 대비</h6>
+                <h3 class="card-title">{{ "{:+,}".format(current_month.diff|default(0)) }}원</h3>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 🔮 1. 이번 달 최종 순익 AI 예측 배너 -->
+{% if forecast %}
+<div class="card border-0 shadow-sm mb-4" style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white;">
+    <div class="card-body p-4">
+        <div class="row align-items-center">
+            <div class="col-lg-7 mb-3 mb-lg-0">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <span class="badge bg-primary px-3 py-2 fs-6"><i class="fas fa-robot me-1"></i> AI 월말 예측</span>
+                    <span class="text-light opacity-75 small">{{ forecast.year }}년 {{ forecast.month }}월 마감 예상 순익</span>
+                </div>
+                <h2 class="display-6 fw-bold mb-1 text-info">
+                    약 {{ "{:,}".format(forecast.forecast_total) }}원
+                </h2>
+                <div class="text-light opacity-75 small">
+                    현재 실적: <strong>{{ "{:,}".format(forecast.current_total) }}원</strong> ({{ forecast.entered_count }}일 집계) 
+                    + 남은 영업일(<strong>{{ forecast.remaining_business_days }}일</strong>) 예상 추가: <strong>+{{ "{:,}".format(forecast.expected_additional) }}원</strong>
+                </div>
+            </div>
+            <div class="col-lg-5 text-lg-end">
+                <div class="p-3 rounded-3" style="background: rgba(255,255,255,0.08);">
+                    <small class="text-light opacity-75 d-block mb-1">작년 동월({{ "{:,}".format(forecast.last_year_total) }}원) 대비 예상</small>
+                    <span class="fs-4 fw-bold {% if forecast.yoy_growth_pct >= 0 %}text-success{% else %}text-danger{% endif %}">
+                        <i class="fas {% if forecast.yoy_growth_pct >= 0 %}fa-arrow-trend-up{% else %}fa-arrow-trend-down{% endif %} me-1"></i>
+                        {{ "{:+,}".format(forecast.yoy_growth_pct) }}%
+                    </span>
+                    <span class="small text-light opacity-75 d-block mt-1">남은 영업일 요일 가중치 반영 완료</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- ⚖️ 2. 작년 오늘 vs 올해 오늘 & 💊 3. 황금비율 진단 -->
+<div class="row g-3 mb-4">
+    <!-- 작년 동요일 비교 -->
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span class="fw-bold"><i class="fas fa-balance-scale text-primary me-2"></i>작년 오늘 vs 올해 오늘 1:1 비교</span>
+                <span class="badge bg-light text-dark">동주차 동요일 대조</span>
+            </div>
+            <div class="card-body">
+                {% if yoy_day %}
+                <div class="d-flex justify-content-between align-items-center p-3 rounded-3 bg-light mb-3">
+                    <div>
+                        <small class="text-muted d-block">최근 영업일 ({{ yoy_day.current_date }} {{ yoy_day.current_dow }})</small>
+                        <span class="fs-4 fw-bold text-primary">{{ "{:,}".format(yoy_day.current_total) }}원</span>
+                    </div>
+                    <div class="text-center">
+                        <span class="badge bg-secondary">VS</span>
+                    </div>
+                    <div class="text-end">
+                        <small class="text-muted d-block">작년 동요일 ({{ yoy_day.yoy_date }})</small>
+                        <span class="fs-4 fw-bold text-muted">{{ "{:,}".format(yoy_day.yoy_total) }}원</span>
+                    </div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <span class="small text-muted">전년 대비 당일 증감:</span>
+                    <span class="fw-bold fs-5 {% if yoy_day.diff >= 0 %}text-success{% else %}text-danger{% endif %}">
+                        {{ "{:+,}".format(yoy_day.diff) }}원 ({{ "{:+,}".format(yoy_day.growth_pct) }}%)
+                    </span>
+                </div>
+                <div class="small text-muted mt-2 pt-2 border-top">
+                    조제: {{ "{:,}".format(yoy_day.current_dispensing) }}원 | 일매: {{ "{:,}".format(yoy_day.current_daily) }}원 | 비보험: {{ "{:,}".format(yoy_day.current_non_insurance) }}원
+                </div>
+                {% else %}
+                <div class="text-muted text-center py-4">비교 데이터가 충분하지 않습니다.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- 황금비율 진단 -->
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span class="fw-bold"><i class="fas fa-heartbeat text-danger me-2"></i>약국 순익 황금비율 밸런스 진단</span>
+                <span class="badge bg-{{ balance.status }}">{{ balance.status_text }}</span>
+            </div>
+            <div class="card-body">
+                <!-- 3단 프로그레스 바 -->
+                <div class="progress mb-3" style="height: 24px; font-size: 0.8rem; font-weight: bold;">
+                    <div class="progress-bar bg-primary" role="progressbar" style="width: {{ balance.disp_pct }}%;" title="조제료">
+                        조제 {{ balance.disp_pct }}%
+                    </div>
+                    <div class="progress-bar bg-success" role="progressbar" style="width: {{ balance.daily_pct }}%;" title="일매순익">
+                        매약 {{ balance.daily_pct }}%
+                    </div>
+                    <div class="progress-bar bg-warning text-dark" role="progressbar" style="width: {{ balance.nim_pct }}%;" title="비보험약가차액">
+                        비보험 {{ balance.nim_pct }}%
+                    </div>
+                </div>
+
+                <div class="row text-center mb-3 g-1">
+                    <div class="col-4">
+                        <small class="text-muted d-block">조제료 순익</small>
+                        <strong class="text-primary">{{ "{:,}".format(balance.disp_val) }}원</strong>
+                    </div>
+                    <div class="col-4">
+                        <small class="text-muted d-block">일매순익 (매약)</small>
+                        <strong class="text-success">{{ "{:,}".format(balance.daily_val) }}원</strong>
+                    </div>
+                    <div class="col-4">
+                        <small class="text-muted d-block">비보험 차액순익</small>
+                        <strong class="text-warning text-dark">{{ "{:,}".format(balance.nim_val) }}원</strong>
+                    </div>
+                </div>
+
+                <div class="p-2 rounded-2 bg-light border-start border-4 border-{{ balance.status }} small">
+                    <i class="fas fa-info-circle text-{{ balance.status }} me-1"></i>
+                    <strong>경영 진단:</strong> {{ balance.comment }}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 차트 영역 -->
+<div class="row">
+    <div class="col-md-8">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="fas fa-chart-line"></i> 월별 순익 추이
+            </div>
+            <div class="card-body">
+                <canvas id="monthlyTrendChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="fas fa-chart-pie"></i> 순익 구성 비율
+            </div>
+            <div class="card-body">
+                <canvas id="compositionChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="fas fa-chart-bar"></i> 전년 동월 대비
+            </div>
+            <div class="card-body">
+                <canvas id="yearCompareChart" height="250"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const monthlyData = {{ monthly_data|tojson }};
+    const currentMonth = {{ current_month_data|tojson }};
+    const yearCompare = {{ year_compare|tojson }};
+    initDashboardCharts(monthlyData, currentMonth, yearCompare);
+</script>
+{% endblock %}

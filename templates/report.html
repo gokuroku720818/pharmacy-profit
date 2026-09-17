@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% block title %}리포트 - 약국 순익 관리{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="fas fa-file-alt"></i> 월별 리포트</h2>
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <form method="GET" action="/report" class="d-flex gap-2">
+            <select name="year" class="form-select">
+                {% for y in years %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}년</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-primary">조회</button>
+        </form>
+    </div>
+    <div class="col-md-8 text-end">
+        <a href="/export/{{ selected_year }}" class="btn btn-outline-success">
+            <i class="fas fa-file-excel"></i> CSV 내보내기
+        </a>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">{{ selected_year }}년 월별 순익 현황</div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-bordered table-hover align-middle">
+                <thead class="table-primary">
+                    <tr>
+                        <th>월</th>
+                        <th class="text-end">조제+일매순익</th>
+                        <th class="text-end">비보험약가차액</th>
+                        <th class="text-end">전체 합계</th>
+                        <th class="text-end">전월 대비</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in report_data %}
+                    <tr>
+                        <td><strong>{{ row.month }}월</strong></td>
+                        <td class="text-end">{{ "{:,}".format(row.dispensing_plus_daily_total) }}</td>
+                        <td class="text-end">{{ "{:,}".format(row.non_insurance_total) }}</td>
+                        <td class="text-end"><strong>{{ "{:,}".format(row.grand_total) }}</strong></td>
+                        <td class="text-end {% if row.prev_month_diff >= 0 %}text-success{% else %}text-danger{% endif %}">
+                            {{ "{:+,}".format(row.prev_month_diff) }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot class="table-dark">
+                    <tr>
+                        <td><strong>합계</strong></td>
+                        <td class="text-end"><strong>{{ "{:,}".format(year_total.dpd) }}</strong></td>
+                        <td class="text-end"><strong>{{ "{:,}".format(year_total.nim) }}</strong></td>
+                        <td class="text-end"><strong>{{ "{:,}".format(year_total.grand) }}</strong></td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">{{ selected_year }}년 월별 순익 차트</div>
+    <div class="card-body">
+        <canvas id="reportChart" height="300"></canvas>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const reportData = {{ report_data_json|tojson }};
+    initReportChart(reportData);
+</script>
+{% endblock %}

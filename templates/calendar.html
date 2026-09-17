@@ -1,0 +1,235 @@
+{% extends 'base.html' %}
+{% block title %}달력 뷰 - 약국 순익 관리{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+    <div class="d-flex align-items-center gap-2 mb-2 mb-md-0">
+        <a href="/calendar?year={{ prev_year }}&month={{ prev_month }}" class="btn btn-outline-primary btn-sm">
+            <i class="fas fa-chevron-left"></i> 이전달
+        </a>
+        <h3 class="fw-bold mb-0 text-primary">
+            <i class="fas fa-calendar-check me-2"></i>{{ year }}년 {{ month }}월 순익 달력
+        </h3>
+        <a href="/calendar?year={{ next_year }}&month={{ next_month }}" class="btn btn-outline-primary btn-sm">
+            다음달 <i class="fas fa-chevron-right"></i>
+        </a>
+    </div>
+
+    <!-- 빠른 연월 이동 -->
+    <form method="GET" action="/calendar" class="d-flex gap-2 align-items-center">
+        <select name="year" class="form-select form-select-sm" style="width: 100px;">
+            {% for y in years %}
+            <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}년</option>
+            {% endfor %}
+        </select>
+        <select name="month" class="form-select form-select-sm" style="width: 80px;">
+            {% for m in range(1, 13) %}
+            <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}월</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm btn-primary">이동</button>
+    </form>
+</div>
+
+<!-- 당월 요약 및 AI 월말 예측 배너 -->
+<div class="row g-2 mb-3">
+    <div class="col-6 col-md-3">
+        <div class="card p-3 border-0 bg-primary text-white shadow-sm">
+            <small class="opacity-75">현재 누적 순익 ({{ total_days_worked }}일)</small>
+            <h4 class="fw-bold mb-0">{{ "{:,}".format(month_summary.grand_total if month_summary else 0) }}원</h4>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card p-3 border-0 bg-success text-white shadow-sm">
+            <small class="opacity-75">조제 + 일매순익</small>
+            <h5 class="fw-bold mb-0">{{ "{:,}".format(month_summary.dispensing_plus_daily_total if month_summary else 0) }}원</h5>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card p-3 border-0 bg-warning text-dark shadow-sm">
+            <small class="opacity-75">비보험 약가차액</small>
+            <h5 class="fw-bold mb-0">{{ "{:,}".format(month_summary.non_insurance_total if month_summary else 0) }}원</h5>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card p-3 border-0 shadow-sm" style="background: linear-gradient(135deg, #1e293b, #334155); color: white;">
+            <div class="d-flex justify-content-between align-items-center">
+                <small class="text-info fw-bold"><i class="fas fa-robot me-1"></i>월말 예상 순익</small>
+                <span class="badge {% if forecast.yoy_growth_pct >= 0 %}bg-success{% else %}bg-danger{% endif %} text-white" style="font-size: 0.7rem;">
+                    작년비 {{ "{:+,}".format(forecast.yoy_growth_pct) }}%
+                </span>
+            </div>
+            <h5 class="fw-bold mb-0 mt-1 text-info">약 {{ "{:,}".format(forecast.forecast_total) }}원</h5>
+            <small class="opacity-75" style="font-size: 0.75rem;">(남은 영업일 {{ forecast.remaining_business_days }}일 가중치 반영)</small>
+        </div>
+    </div>
+</div>
+
+<!-- 월간 달력 테이블 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-bordered mb-0 calendar-table text-center align-middle">
+                <thead>
+                    <tr class="table-light">
+                        <th class="text-danger" style="width: 14.28%;">일 (SUN)</th>
+                        <th style="width: 14.28%;">월 (MON)</th>
+                        <th style="width: 14.28%;">화 (TUE)</th>
+                        <th style="width: 14.28%;">수 (WED)</th>
+                        <th style="width: 14.28%;">목 (THU)</th>
+                        <th style="width: 14.28%;">금 (FRI)</th>
+                        <th class="text-primary" style="width: 14.28%;">토 (SAT)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for week in cal_weeks %}
+                    <tr>
+                        {% for day in week %}
+                        {% set col_idx = loop.index0 %}
+                        {% if day == 0 %}
+                        <td class="bg-light calendar-empty-cell"></td>
+                        {% else %}
+                        {% set p = profit_by_day.get(day) %}
+                        <td class="calendar-day-cell {% if p %}has-data{% endif %}" 
+                            onclick="openEditModal('{{ year }}-{{ '%02d' % month }}-{{ '%02d' % day }}', '{{ p.dispensing_fee if p else 0 }}', '{{ p.daily_net_profit if p else 0 }}', '{{ p.non_insurance_margin if p else 0 }}', '{{ p.memo if p and p.memo else '' }}')">
+                            
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="badge {% if col_idx == 0 %}bg-danger{% elif col_idx == 6 %}bg-primary{% else %}bg-dark{% endif %}">
+                                    {{ day }}일
+                                </span>
+                                {% if p %}
+                                <small class="text-muted"><i class="fas fa-edit text-muted"></i></small>
+                                {% else %}
+                                <small class="text-muted opacity-50"><i class="fas fa-plus"></i></small>
+                                {% endif %}
+                            </div>
+
+                            {% if p %}
+                            <div class="calendar-profit-info text-end">
+                                <div class="profit-total fw-bold text-primary">{{ "{:,}".format(p.total) }}원</div>
+                                <div class="profit-sub small text-muted">조제: {{ "{:,}".format(p.dispensing_fee) }}</div>
+                                <div class="profit-sub small text-muted">일매: {{ "{:,}".format(p.daily_net_profit) }}</div>
+                                <div class="profit-sub small text-success">비보험: {{ "{:,}".format(p.non_insurance_margin) }}</div>
+                            </div>
+                            {% else %}
+                            <div class="py-3 text-muted small opacity-50">
+                                클릭하여 입력
+                            </div>
+                            {% endif %}
+                        </td>
+                        {% endif %}
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 날짜 클릭 시 열리는 간편 입력/수정 모달 -->
+<div class="modal fade" id="dayEditModal" tabindex="-1" aria-labelledby="dayEditModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content border-0 shadow">
+            <form method="POST" action="/input">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="dayEditModalLabel">
+                        <i class="fas fa-calendar-day me-2"></i><span id="modalDateTitle"></span> 순익 입력 / 수정
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="date" id="modalDate">
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">조제료 (원)</label>
+                        <input type="number" class="form-control form-control-lg text-end" id="modalDispensing" name="dispensing_fee" value="0" min="0" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">일매순익 (원)</label>
+                        <input type="number" class="form-control form-control-lg text-end" id="modalDaily" name="daily_net_profit" value="0" min="0" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">비보험약가차액순익 (원)</label>
+                        <input type="number" class="form-control form-control-lg text-end" id="modalNonInsurance" name="non_insurance_margin" value="0" min="0" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">메모 (선택사항)</label>
+                        <input type="text" class="form-control" id="modalMemo" name="memo" placeholder="휴무, 야간진료, 특이사항 등">
+                    </div>
+
+                    <!-- 실시간 합계 미리보기 -->
+                    <div class="alert alert-info py-2 mb-0 text-center">
+                        당일 합계: <strong id="modalTotalPreview" class="fs-5 text-primary">0</strong>원
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary px-4"><i class="fas fa-save me-1"></i> 저장하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<style>
+.calendar-table th { padding: 12px; font-weight: bold; }
+.calendar-day-cell {
+    height: 110px;
+    padding: 8px !important;
+    vertical-align: top;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    background-color: #ffffff;
+}
+.calendar-day-cell:hover {
+    background-color: #f0f7ff !important;
+}
+.calendar-day-cell.has-data {
+    background-color: #fafcfe;
+}
+.calendar-profit-info .profit-total {
+    font-size: 0.95rem;
+    margin-top: 4px;
+    margin-bottom: 2px;
+}
+.calendar-profit-info .profit-sub {
+    font-size: 0.75rem;
+    line-height: 1.2;
+}
+</style>
+
+<script>
+let editModal = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    editModal = new bootstrap.Modal(document.getElementById('dayEditModal'));
+    
+    ['modalDispensing', 'modalDaily', 'modalNonInsurance'].forEach(id => {
+        document.getElementById(id).addEventListener('input', updateModalTotal);
+    });
+});
+
+function openEditModal(dateStr, dispensing, daily, nonInsurance, memo) {
+    document.getElementById('modalDate').value = dateStr;
+    document.getElementById('modalDateTitle').textContent = dateStr;
+    document.getElementById('modalDispensing').value = dispensing || 0;
+    document.getElementById('modalDaily').value = daily || 0;
+    document.getElementById('modalNonInsurance').value = nonInsurance || 0;
+    document.getElementById('modalMemo').value = memo || '';
+    updateModalTotal();
+    editModal.show();
+}
+
+function updateModalTotal() {
+    const d = parseInt(document.getElementById('modalDispensing').value) || 0;
+    const n = parseInt(document.getElementById('modalDaily').value) || 0;
+    const ni = parseInt(document.getElementById('modalNonInsurance').value) || 0;
+    const total = d + n + ni;
+    document.getElementById('modalTotalPreview').textContent = total.toLocaleString();
+}
+</script>
+{% endblock %}
