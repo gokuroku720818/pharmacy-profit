@@ -6,8 +6,76 @@ from werkzeug.security import generate_password_hash
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    from psycopg2.pool import ThreadedConnectionPool
 except ImportError:
     psycopg2 = None
+    ThreadedConnectionPool = None
+
+_pg_pool = None
+
+
+def get_pg_pool():
+    global _pg_pool
+    if _pg_pool is None and psycopg2 and ThreadedConnectionPool:
+        db_url = get_database_url()
+        if db_url:
+            try:
+                _pg_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url, cursor_factory=RealDictCursor)
+                print("⚡ PostgreSQL 커넥션 풀 활성화 완료 (고속 재사용 모드)")
+            except Exception as e:
+                print(f"커넥션 풀 생성 실패: {e}")
+    return _pg_pool
+
+
+class PostgresConnectionWrapper:
+    def __init__(self, conn, from_pool=False):
+        self.conn = conn
+        self.from_pool = from_pool
+
+    def cursor(self):
+        return PostgresCursorWrapper(self.conn.cursor())
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
+
+    def close(self):
+        if self.from_pool:
+            pool = get_pg_pool()
+            if pool:
+                pool.putconn(self.conn)
+                return
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+
+def get_db():
+    """데이터베이스 연결 반환 (고속 커넥션 풀 우선, 미설정 시 SQLite)"""
+    db_url = get_database_url()
+    if db_url and psycopg2:
+        pool = get_pg_pool()
+        if pool:
+            pg_conn = pool.getconn()
+            return PostgresConnectionWrapper(pg_conn, from_pool=True)
+        else:
+            pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+            return PostgresConnectionWrapper(pg_conn, from_pool=False)
+    else:
+        os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
+        conn = sqlite3.connect(SQLITE_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
 
 SQLITE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'sales.db')
 
@@ -99,41 +167,6 @@ class PostgresCursorWrapper:
         return self.cursor.description
 
 
-class PostgresConnectionWrapper:
-    def __init__(self, conn):
-        self.conn = conn
-
-    def cursor(self):
-        return PostgresCursorWrapper(self.conn.cursor())
-
-    def execute(self, sql, params=None):
-        cur = self.cursor()
-        cur.execute(sql, params)
-        return cur
-
-    def commit(self):
-        self.conn.commit()
-
-    def rollback(self):
-        self.conn.rollback()
-
-    def close(self):
-        self.conn.close()
-
-
-def get_db():
-    """데이터베이스 연결 반환 (PostgreSQL 우선, 미설정 시 SQLite)"""
-    db_url = get_database_url()
-    if db_url and psycopg2:
-        pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-        return PostgresConnectionWrapper(pg_conn)
-    else:
-        os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
-        conn = sqlite3.connect(SQLITE_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
 
 
 def init_db():

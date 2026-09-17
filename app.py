@@ -47,14 +47,18 @@ def admin_required(f):
     return decorated_function
 
 
-def get_latest_month_summary(user_id):
-    """데이터가 있는 가장 최근 월의 순익 요약"""
-    conn = get_db()
+def get_latest_month_summary(user_id, conn=None):
+    """데이터가 있는 가장 최근 월의 순익 요약 (연결 재사용 최적화)"""
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
     row = conn.execute(
         'SELECT * FROM monthly_summary WHERE user_id = ? AND grand_total > 0 ORDER BY year DESC, month DESC LIMIT 1',
         (user_id,)
     ).fetchone()
-    conn.close()
+    if should_close:
+        conn.close()
 
     if row:
         return {
@@ -317,7 +321,7 @@ def dashboard():
     user_id = session['user_id']
     conn = get_db()
 
-    current_month = get_latest_month_summary(user_id)
+    current_month = get_latest_month_summary(user_id, conn)
 
     rows = conn.execute('''
         SELECT year, month, dispensing_plus_daily_total, non_insurance_total, grand_total
