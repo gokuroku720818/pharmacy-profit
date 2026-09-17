@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import re
+import threading
 from werkzeug.security import generate_password_hash
 
 try:
@@ -12,18 +13,22 @@ except ImportError:
     ThreadedConnectionPool = None
 
 _pg_pool = None
+_pg_pool_lock = threading.Lock()
 
 
 def get_pg_pool():
     global _pg_pool
     if _pg_pool is None and psycopg2 and ThreadedConnectionPool:
-        db_url = get_database_url()
-        if db_url:
-            try:
-                _pg_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url, cursor_factory=RealDictCursor)
-                print("⚡ PostgreSQL 커넥션 풀 활성화 완료 (고속 재사용 모드)")
-            except Exception as e:
-                print(f"커넥션 풀 생성 실패: {e}")
+        with _pg_pool_lock:
+            # 더블 체크: 락 획득 사이에 다른 스레드가 이미 생성했을 수 있음
+            if _pg_pool is None:
+                db_url = get_database_url()
+                if db_url:
+                    try:
+                        _pg_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url, cursor_factory=RealDictCursor)
+                        print("⚡ PostgreSQL 커넥션 풀 활성화 완료 (고속 재사용 모드)")
+                    except Exception as e:
+                        print(f"커넥션 풀 생성 실패: {e}")
     return _pg_pool
 
 
@@ -31,6 +36,14 @@ class PostgresConnectionWrapper:
     def __init__(self, conn, from_pool=False):
         self.conn = conn
         self.from_pool = from_pool
+        self._closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
     def cursor(self):
         return PostgresCursorWrapper(self.conn.cursor())
@@ -47,7 +60,15 @@ class PostgresConnectionWrapper:
         self.conn.rollback()
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
         if self.from_pool:
+            # 풀에 반납하기 전에 미완료 트랜잭션을 롤백하여 dirty 상태 방지
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
             pool = get_pg_pool()
             if pool:
                 pool.putconn(self.conn)
@@ -64,7 +85,26 @@ def get_db():
     if db_url and psycopg2:
         pool = get_pg_pool()
         if pool:
-            pg_conn = pool.getconn()
+            try:
+                pg_conn = pool.getconn()
+            except Exception:
+                # 풀 고갈 시 직접 연결로 폴백
+                pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+                return PostgresConnectionWrapper(pg_conn, from_pool=False)
+            # 유휴 커넥션 헬스 체크 (Neon 등 클라우드 DB 타임아웃 대응)
+            try:
+                pg_conn.cursor().execute("SELECT 1")
+                pg_conn.rollback()  # 헬스 체크 트랜잭션 정리
+            except Exception:
+                try:
+                    pool.putconn(pg_conn, close=True)
+                except Exception:
+                    pass
+                try:
+                    pg_conn = pool.getconn()
+                except Exception:
+                    pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+                    return PostgresConnectionWrapper(pg_conn, from_pool=False)
             return PostgresConnectionWrapper(pg_conn, from_pool=True)
         else:
             pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
@@ -508,30 +548,35 @@ def recalc_monthly_summary(conn, user_id, year, month):
 def get_all_users_stats():
     """모든 가입 회원 목록 및 각 약국의 통계 반환 (관리자 전용)"""
     conn = get_db()
-    users = conn.execute('''
-        SELECT 
-            u.id, u.username, u.pharmacy_name, u.created_at,
-            COUNT(d.id) as total_entries,
-            MIN(d.date) as min_date,
-            MAX(d.date) as max_date,
-            COALESCE(SUM(d.total), 0) as total_profit
-        FROM users u
-        LEFT JOIN daily_profit d ON u.id = d.user_id
-        GROUP BY u.id, u.username, u.pharmacy_name, u.created_at
-        ORDER BY u.id ASC
-    ''').fetchall()
-    conn.close()
+    try:
+        users = conn.execute('''
+            SELECT 
+                u.id, u.username, u.pharmacy_name, u.created_at,
+                COUNT(d.id) as total_entries,
+                MIN(d.date) as min_date,
+                MAX(d.date) as max_date,
+                COALESCE(SUM(d.total), 0) as total_profit
+            FROM users u
+            LEFT JOIN daily_profit d ON u.id = d.user_id
+            GROUP BY u.id, u.username, u.pharmacy_name, u.created_at
+            ORDER BY u.id ASC
+        ''').fetchall()
+    finally:
+        conn.close()
     return users
 
 
 def delete_user_and_data(user_id):
     """특정 회원의 모든 데이터와 계정 삭제 (관리자 전용)"""
     conn = get_db()
-    conn.execute('DELETE FROM daily_profit WHERE user_id = ?', (user_id,))
-    conn.execute('DELETE FROM monthly_summary WHERE user_id = ?', (user_id,))
-    conn.execute('DELETE FROM users WHERE id = ?', (user_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute('DELETE FROM user_calculator_settings WHERE user_id = ?', (user_id,))
+        conn.execute('DELETE FROM daily_profit WHERE user_id = ?', (user_id,))
+        conn.execute('DELETE FROM monthly_summary WHERE user_id = ?', (user_id,))
+        conn.execute('DELETE FROM users WHERE id = ?', (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':

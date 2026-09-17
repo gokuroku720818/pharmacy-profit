@@ -36,19 +36,19 @@
     <div class="col-6 col-md-3">
         <div class="card p-3 border-0 bg-primary text-white shadow-sm">
             <small class="opacity-75">현재 누적 순익 ({{ total_days_worked }}일)</small>
-            <h4 class="fw-bold mb-0">{{ "{:,}".format(month_summary.grand_total if month_summary else 0) }}원</h4>
+            <h4 class="fw-bold mb-0">{{ "{:,}".format((month_summary.grand_total or 0) if month_summary else 0) }}원</h4>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="card p-3 border-0 bg-success text-white shadow-sm">
             <small class="opacity-75">조제 + 일매순익</small>
-            <h5 class="fw-bold mb-0">{{ "{:,}".format(month_summary.dispensing_plus_daily_total if month_summary else 0) }}원</h5>
+            <h5 class="fw-bold mb-0">{{ "{:,}".format((month_summary.dispensing_plus_daily_total or 0) if month_summary else 0) }}원</h5>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="card p-3 border-0 bg-warning text-dark shadow-sm">
             <small class="opacity-75">비보험 약가차액</small>
-            <h5 class="fw-bold mb-0">{{ "{:,}".format(month_summary.non_insurance_total if month_summary else 0) }}원</h5>
+            <h5 class="fw-bold mb-0">{{ "{:,}".format((month_summary.non_insurance_total or 0) if month_summary else 0) }}원</h5>
         </div>
     </div>
     <div class="col-6 col-md-3">
@@ -91,7 +91,11 @@
                         {% else %}
                         {% set p = profit_by_day.get(day) %}
                         <td class="calendar-day-cell {% if p %}has-data{% endif %}" 
-                            onclick="openEditModal('{{ year }}-{{ '%02d' % month }}-{{ '%02d' % day }}', '{{ p.dispensing_fee if p else 0 }}', '{{ p.daily_net_profit if p else 0 }}', '{{ p.non_insurance_margin if p else 0 }}', '{{ p.memo if p and p.memo else '' }}')">
+                            data-date="{{ year }}-{{ '%02d' % month }}-{{ '%02d' % day }}"
+                            data-dispensing="{{ p.dispensing_fee if p else 0 }}"
+                            data-daily="{{ p.daily_net_profit if p else 0 }}"
+                            data-non-insurance="{{ p.non_insurance_margin if p else 0 }}"
+                            data-memo="{{ (p.memo if p and p.memo else '')|e }}">
                             
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <span class="badge {% if col_idx == 0 %}bg-danger{% elif col_idx == 6 %}bg-primary{% else %}bg-dark{% endif %}">
@@ -205,15 +209,40 @@
 <script>
 let editModal = null;
 
+function getEditModal() {
+    if (!editModal) {
+        const modalEl = document.getElementById('dayEditModal');
+        if (modalEl) {
+            editModal = new bootstrap.Modal(modalEl);
+        }
+    }
+    return editModal;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    editModal = new bootstrap.Modal(document.getElementById('dayEditModal'));
+    getEditModal();
     
     ['modalDispensing', 'modalDaily', 'modalNonInsurance'].forEach(id => {
-        document.getElementById(id).addEventListener('input', updateModalTotal);
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('input', updateModalTotal);
+        }
+    });
+
+    document.querySelectorAll('.calendar-day-cell').forEach(cell => {
+        cell.addEventListener('click', function() {
+            const dateStr = this.dataset.date || '';
+            const dispensing = this.dataset.dispensing || 0;
+            const daily = this.dataset.daily || 0;
+            const nonInsurance = this.dataset.nonInsurance || 0;
+            const memo = this.dataset.memo || '';
+            openEditModal(dateStr, dispensing, daily, nonInsurance, memo);
+        });
     });
 });
 
 function openEditModal(dateStr, dispensing, daily, nonInsurance, memo) {
+    const modal = getEditModal();
     document.getElementById('modalDate').value = dateStr;
     document.getElementById('modalDateTitle').textContent = dateStr;
     document.getElementById('modalDispensing').value = dispensing || 0;
@@ -221,7 +250,9 @@ function openEditModal(dateStr, dispensing, daily, nonInsurance, memo) {
     document.getElementById('modalNonInsurance').value = nonInsurance || 0;
     document.getElementById('modalMemo').value = memo || '';
     updateModalTotal();
-    editModal.show();
+    if (modal) {
+        modal.show();
+    }
 }
 
 function updateModalTotal() {

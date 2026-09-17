@@ -14,9 +14,10 @@ import os
 import re
 import openpyxl
 import msoffcrypto
+from urllib.parse import quote
 
 app = Flask(__name__)
-app.secret_key = 'pharmacy-profit-saas-super-secret-key-2026'
+app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-profit-saas-super-secret-key-2026')
 
 # 서버 구동 시 DB 및 스키마 자동 초기화
 init_db()
@@ -53,21 +54,23 @@ def get_latest_month_summary(user_id, conn=None):
     if conn is None:
         conn = get_db()
         should_close = True
-    row = conn.execute(
-        'SELECT * FROM monthly_summary WHERE user_id = ? AND grand_total > 0 ORDER BY year DESC, month DESC LIMIT 1',
-        (user_id,)
-    ).fetchone()
-    if should_close:
-        conn.close()
+    try:
+        row = conn.execute(
+            'SELECT * FROM monthly_summary WHERE user_id = ? AND grand_total > 0 ORDER BY year DESC, month DESC LIMIT 1',
+            (user_id,)
+        ).fetchone()
+    finally:
+        if should_close:
+            conn.close()
 
     if row:
         return {
             'year': row['year'],
             'month': row['month'],
-            'dispensing_plus_daily': row['dispensing_plus_daily_total'],
-            'non_insurance': row['non_insurance_total'],
-            'grand_total': row['grand_total'],
-            'diff': row['prev_month_diff']
+            'dispensing_plus_daily': int(row['dispensing_plus_daily_total'] or 0),
+            'non_insurance': int(row['non_insurance_total'] or 0),
+            'grand_total': int(row['grand_total'] or 0),
+            'diff': int(row['prev_month_diff'] or 0)
         }
     now = datetime.date.today()
     return {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'grand_total': 0, 'diff': 0}
@@ -347,12 +350,14 @@ def login():
         return redirect(url_for('dashboard'))
 
     if request.method == 'POST':
-        username = request.form['username'].strip()
-        password = request.form['password']
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
 
         conn = get_db()
-        user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
-        conn.close()
+        try:
+            user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+        finally:
+            conn.close()
 
         if user and check_password_hash(user['password_hash'], password):
             session['user_id'] = user['id']
@@ -369,27 +374,32 @@ def login():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        pharmacy_name = request.form['pharmacy_name'].strip()
-        username = request.form['username'].strip()
-        password = request.form['password']
+        pharmacy_name = request.form.get('pharmacy_name', '').strip()
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
 
-        conn = get_db()
-        exist = conn.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
-
-        if exist:
-            flash('이미 존재하는 아이디입니다. 다른 아이디를 사용해 주세요.', 'warning')
-            conn.close()
+        if not pharmacy_name or not username or not password:
+            flash('약국명, 아이디, 비밀번호를 모두 입력해주세요.', 'warning')
             return redirect(url_for('register'))
 
-        p_hash = generate_password_hash(password)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO users (username, password_hash, pharmacy_name)
-            VALUES (?, ?, ?)
-        ''', (username, p_hash, pharmacy_name))
-        conn.commit()
-        new_id = cursor.lastrowid
-        conn.close()
+        conn = get_db()
+        try:
+            exist = conn.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
+
+            if exist:
+                flash('이미 존재하는 아이디입니다. 다른 아이디를 사용해 주세요.', 'warning')
+                return redirect(url_for('register'))
+
+            p_hash = generate_password_hash(password)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO users (username, password_hash, pharmacy_name)
+                VALUES (?, ?, ?)
+            ''', (username, p_hash, pharmacy_name))
+            conn.commit()
+            new_id = cursor.lastrowid
+        finally:
+            conn.close()
 
         session['user_id'] = new_id
         session['username'] = username
@@ -417,45 +427,45 @@ def logout():
 def dashboard():
     user_id = session['user_id']
     conn = get_db()
+    try:
+        current_month = get_latest_month_summary(user_id, conn)
 
-    current_month = get_latest_month_summary(user_id, conn)
+        rows = conn.execute('''
+            SELECT year, month, dispensing_plus_daily_total, non_insurance_total, grand_total
+            FROM monthly_summary
+            WHERE user_id = ? AND grand_total > 0
+            ORDER BY year, month
+        ''', (user_id,)).fetchall()
 
-    rows = conn.execute('''
-        SELECT year, month, dispensing_plus_daily_total, non_insurance_total, grand_total
-        FROM monthly_summary
-        WHERE user_id = ? AND grand_total > 0
-        ORDER BY year, month
-    ''', (user_id,)).fetchall()
+        monthly_data = {
+            'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
+            'totals': [int(r['grand_total']) for r in rows],
+            'dispensing_daily': [int(r['dispensing_plus_daily_total']) for r in rows],
+            'non_insurance': [int(r['non_insurance_total']) for r in rows]
+        }
 
-    monthly_data = {
-        'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
-        'totals': [r['grand_total'] for r in rows],
-        'dispensing_daily': [r['dispensing_plus_daily_total'] for r in rows],
-        'non_insurance': [r['non_insurance_total'] for r in rows]
-    }
+        years_data = {}
+        for r in rows:
+            yr = r['year']
+            if yr not in years_data:
+                years_data[yr] = [0] * 12
+            years_data[yr][r['month'] - 1] = int(r['grand_total'])
 
-    years_data = {}
-    for r in rows:
-        yr = r['year']
-        if yr not in years_data:
-            years_data[yr] = [0] * 12
-        years_data[yr][r['month'] - 1] = r['grand_total']
+        year_compare = {
+            'labels': [f'{m}월' for m in range(1, 13)],
+            'datasets': [
+                {'label': f'{yr}년', 'data': [int(v) for v in data]}
+                for yr, data in sorted(years_data.items())
+                if any(v > 0 for v in data)
+            ]
+        }
 
-    year_compare = {
-        'labels': [f'{m}월' for m in range(1, 13)],
-        'datasets': [
-            {'label': f'{yr}년', 'data': data}
-            for yr, data in sorted(years_data.items())
-            if any(v > 0 for v in data)
-        ]
-    }
-
-    forecast = get_month_forecast(conn, user_id, current_month['year'], current_month['month'])
-    yoy_day = get_yoy_day_comparison(conn, user_id)
-    balance = get_profit_balance_diagnosis(conn, user_id, current_month['year'], current_month['month'])
-    narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast)
-
-    conn.close()
+        forecast = get_month_forecast(conn, user_id, current_month['year'], current_month['month'])
+        yoy_day = get_yoy_day_comparison(conn, user_id)
+        balance = get_profit_balance_diagnosis(conn, user_id, current_month['year'], current_month['month'])
+        narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast)
+    finally:
+        conn.close()
 
     return render_template('dashboard.html',
                            current_month=current_month,
@@ -474,46 +484,52 @@ def input_sales():
     user_id = session['user_id']
     conn = get_db()
 
-    if request.method == 'POST':
-        date_str = request.form['date']
-        dispensing = int(request.form.get('dispensing_fee', 0))
-        daily_net = int(request.form.get('daily_net_profit', 0))
-        non_insurance = int(request.form.get('non_insurance_margin', 0))
-        memo = request.form.get('memo', '')
+    try:
+        if request.method == 'POST':
+            date_str = request.form.get('date', '')
+            try:
+                dispensing = int(request.form.get('dispensing_fee') or 0)
+                daily_net = int(request.form.get('daily_net_profit') or 0)
+                non_insurance = int(request.form.get('non_insurance_margin') or 0)
+                dt = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+            except (ValueError, TypeError):
+                flash('날짜 또는 금액을 올바르게 입력해주세요.', 'danger')
+                conn.close()
+                return redirect(url_for('input_sales'))
+            memo = request.form.get('memo', '')
 
-        dt = datetime.datetime.strptime(date_str, '%Y-%m-%d')
-        dow = ['월', '화', '수', '목', '금', '토', '일'][dt.weekday()]
-        dpd = dispensing + daily_net
-        total = dpd + non_insurance
+            dow = ['월', '화', '수', '목', '금', '토', '일'][dt.weekday()]
+            dpd = dispensing + daily_net
+            total = dpd + non_insurance
 
-        try:
-            conn.execute('''
-                INSERT OR REPLACE INTO daily_profit
-                (user_id, date, day_of_week, dispensing_fee, daily_net_profit,
-                 dispensing_plus_daily, non_insurance_margin, total, memo, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-            ''', (user_id, date_str, dow, dispensing, daily_net, dpd, non_insurance, total, memo))
-            conn.commit()
+            try:
+                conn.execute('''
+                    INSERT OR REPLACE INTO daily_profit
+                    (user_id, date, day_of_week, dispensing_fee, daily_net_profit,
+                     dispensing_plus_daily, non_insurance_margin, total, memo, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                ''', (user_id, date_str, dow, dispensing, daily_net, dpd, non_insurance, total, memo))
+                conn.commit()
 
-            recalc_monthly_summary(conn, user_id, dt.year, dt.month)
-            flash(f'{date_str} ({dow}) 순익이 저장되었습니다. 합계: {total:,}원', 'success')
-        except Exception as e:
-            flash(f'저장 실패: {str(e)}', 'danger')
+                recalc_monthly_summary(conn, user_id, dt.year, dt.month)
+                flash(f'{date_str} ({dow}) 순익이 저장되었습니다. 합계: {total:,}원', 'success')
+            except Exception as e:
+                flash(f'저장 실패: {str(e)}', 'danger')
 
+            conn.close()
+            referrer = request.referrer or ''
+            if 'calendar' in referrer:
+                return redirect(url_for('calendar_view', year=dt.year, month=dt.month))
+            return redirect(url_for('input_sales'))
+
+        recent = conn.execute('''
+            SELECT * FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 20
+        ''', (user_id,)).fetchall()
+
+        today = datetime.date.today().isoformat()
+        yoy_day = get_yoy_day_comparison(conn, user_id)
+    finally:
         conn.close()
-        referrer = request.referrer or ''
-        if 'calendar' in referrer:
-            return redirect(url_for('calendar_view', year=dt.year, month=dt.month))
-        return redirect(url_for('input_sales'))
-
-    recent = conn.execute('''
-        SELECT * FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 20
-    ''', (user_id,)).fetchall()
-
-    today = datetime.date.today().isoformat()
-    yoy_day = get_yoy_day_comparison(conn, user_id)
-
-    conn.close()
     return render_template('input.html', today=today, recent_sales=recent, yoy_day=yoy_day)
 
 
@@ -522,40 +538,41 @@ def input_sales():
 def calendar_view():
     user_id = session['user_id']
     conn = get_db()
+    try:
+        years_rows = conn.execute('SELECT DISTINCT year FROM monthly_summary WHERE user_id = ? AND grand_total > 0 ORDER BY year DESC', (user_id,)).fetchall()
+        years = [r['year'] for r in years_rows]
 
-    years_rows = conn.execute('SELECT DISTINCT year FROM monthly_summary WHERE user_id = ? AND grand_total > 0 ORDER BY year DESC', (user_id,)).fetchall()
-    years = [r['year'] for r in years_rows]
+        latest = get_latest_month_summary(user_id, conn)
+        default_year = latest['year'] if latest['year'] > 0 else datetime.date.today().year
+        default_month = latest['month'] if latest['month'] > 0 else datetime.date.today().month
 
-    latest = get_latest_month_summary(user_id)
-    default_year = latest['year'] if latest['year'] > 0 else datetime.date.today().year
-    default_month = latest['month'] if latest['month'] > 0 else datetime.date.today().month
+        year = request.args.get('year', default_year, type=int)
+        month = request.args.get('month', default_month, type=int)
 
-    year = request.args.get('year', default_year, type=int)
-    month = request.args.get('month', default_month, type=int)
+        prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+        next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
 
-    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
-    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+        date_prefix = f"{year}-{month:02d}"
+        rows = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date LIKE ?', (user_id, date_prefix + '%')).fetchall()
+        profit_by_day = {}
+        for r in rows:
+            d_num = int(r['date'].split('-')[2])
+            profit_by_day[d_num] = dict(r)
 
-    date_prefix = f"{year}-{month:02d}"
-    rows = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date LIKE ?', (user_id, date_prefix + '%')).fetchall()
-    profit_by_day = {}
-    for r in rows:
-        d_num = int(r['date'].split('-')[2])
-        profit_by_day[d_num] = dict(r)
+        calendar.setfirstweekday(calendar.SUNDAY)
+        cal_weeks = calendar.monthcalendar(year, month)
 
-    calendar.setfirstweekday(calendar.SUNDAY)
-    cal_weeks = calendar.monthcalendar(year, month)
+        month_summary = conn.execute(
+            'SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? AND month = ?',
+            (user_id, year, month)
+        ).fetchone()
 
-    month_summary = conn.execute(
-        'SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? AND month = ?',
-        (user_id, year, month)
-    ).fetchone()
+        total_days_worked = len(rows)
+        avg_daily = int(month_summary['grand_total']) // total_days_worked if (month_summary and total_days_worked > 0) else 0
 
-    total_days_worked = len(rows)
-    avg_daily = (month_summary['grand_total'] // total_days_worked) if (month_summary and total_days_worked > 0) else 0
-
-    forecast = get_month_forecast(conn, user_id, year, month)
-    conn.close()
+        forecast = get_month_forecast(conn, user_id, year, month)
+    finally:
+        conn.close()
 
     return render_template(
         'calendar.html',
@@ -783,10 +800,12 @@ def export_csv(year):
     user_id = session['user_id']
     pharmacy = session.get('pharmacy_name', '약국')
     conn = get_db()
-    rows = conn.execute('''
-        SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? ORDER BY month
-    ''', (user_id, year)).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute('''
+            SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? ORDER BY month
+        ''', (user_id, year)).fetchall()
+    finally:
+        conn.close()
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -810,88 +829,88 @@ def export_csv(year):
 def trend():
     user_id = session['user_id']
     conn = get_db()
+    try:
+        rows = conn.execute('''
+            SELECT year, month, grand_total, dispensing_plus_daily_total, non_insurance_total
+            FROM monthly_summary
+            WHERE user_id = ? AND grand_total > 0
+            ORDER BY year, month
+        ''', (user_id,)).fetchall()
 
-    rows = conn.execute('''
-        SELECT year, month, grand_total, dispensing_plus_daily_total, non_insurance_total
-        FROM monthly_summary
-        WHERE user_id = ? AND grand_total > 0
-        ORDER BY year, month
-    ''', (user_id,)).fetchall()
+        years_dict = {}
+        for r in rows:
+            yr = r['year']
+            if yr not in years_dict:
+                years_dict[yr] = [0] * 12
+            years_dict[yr][r['month'] - 1] = int(r['grand_total'])
 
-    years_dict = {}
-    for r in rows:
-        yr = r['year']
-        if yr not in years_dict:
-            years_dict[yr] = [0] * 12
-        years_dict[yr][r['month'] - 1] = r['grand_total']
+        yearly_data = [
+            {'year': yr, 'data': [int(v) for v in data]}
+            for yr, data in sorted(years_dict.items())
+            if any(v > 0 for v in data)
+        ]
 
-    yearly_data = [
-        {'year': yr, 'data': data}
-        for yr, data in sorted(years_dict.items())
-        if any(v > 0 for v in data)
-    ]
+        dow_rows = conn.execute('''
+            SELECT day_of_week, AVG(total) as avg_total, COUNT(*) as cnt
+            FROM daily_profit
+            WHERE user_id = ? AND total > 0
+            GROUP BY day_of_week
+        ''', (user_id,)).fetchall()
 
-    dow_rows = conn.execute('''
-        SELECT day_of_week, AVG(total) as avg_total, COUNT(*) as cnt
-        FROM daily_profit
-        WHERE user_id = ? AND total > 0
-        GROUP BY day_of_week
-    ''', (user_id,)).fetchall()
+        day_order = ['월', '화', '수', '목', '금', '토']
+        dow_dict = {r['day_of_week']: int(r['avg_total'] or 0) for r in dow_rows}
+        day_of_week_data = {
+            'labels': day_order,
+            'values': [dow_dict.get(d, 0) for d in day_order]
+        }
 
-    day_order = ['월', '화', '수', '목', '금', '토']
-    dow_dict = {r['day_of_week']: int(r['avg_total']) for r in dow_rows}
-    day_of_week_data = {
-        'labels': day_order,
-        'values': [dow_dict.get(d, 0) for d in day_order]
-    }
+        all_months = conn.execute('''
+            SELECT year, month, grand_total, prev_month_diff
+            FROM monthly_summary
+            WHERE user_id = ? AND grand_total > 0
+            ORDER BY year DESC, month DESC
+            LIMIT 24
+        ''', (user_id,)).fetchall()
 
-    all_months = conn.execute('''
-        SELECT year, month, grand_total, prev_month_diff
-        FROM monthly_summary
-        WHERE user_id = ? AND grand_total > 0
-        ORDER BY year DESC, month DESC
-        LIMIT 24
-    ''', (user_id,)).fetchall()
+        growth_labels = []
+        growth_values = []
+        for r in reversed(all_months):
+            growth_labels.append(f"{r['year']}.{r['month']:02d}")
+            prev_total = int(r['grand_total']) - int(r['prev_month_diff'] or 0)
+            rate = float(round((int(r['prev_month_diff'] or 0) / prev_total) * 100, 1)) if prev_total > 0 else 0.0
+            growth_values.append(rate)
 
-    growth_labels = []
-    growth_values = []
-    for r in reversed(all_months):
-        growth_labels.append(f"{r['year']}.{r['month']:02d}")
-        prev_total = r['grand_total'] - r['prev_month_diff']
-        rate = round((r['prev_month_diff'] / prev_total) * 100, 1) if prev_total > 0 else 0
-        growth_values.append(rate)
+        growth_data = {'labels': growth_labels, 'values': growth_values}
 
-    growth_data = {'labels': growth_labels, 'values': growth_values}
+        ratio_data = {
+            'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
+            'dispensing': [int(r['dispensing_plus_daily_total']) for r in rows],
+            'non_insurance': [int(r['non_insurance_total']) for r in rows]
+        }
 
-    ratio_data = {
-        'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
-        'dispensing': [r['dispensing_plus_daily_total'] for r in rows],
-        'non_insurance': [r['non_insurance_total'] for r in rows]
-    }
+        heatmap_data = []
+        if rows:
+            all_totals = [int(r['grand_total']) for r in rows if r['grand_total'] > 0]
+            min_val = min(all_totals) if all_totals else 0
+            max_val = max(all_totals) if all_totals else 1
 
-    heatmap_data = []
-    if rows:
-        all_totals = [r['grand_total'] for r in rows if r['grand_total'] > 0]
-        min_val = min(all_totals) if all_totals else 0
-        max_val = max(all_totals) if all_totals else 1
-
-        for yr, data in sorted(years_dict.items()):
-            months = []
-            for val in data:
-                if val > 0 and max_val > min_val:
-                    intensity = (val - min_val) / (max_val - min_val)
-                    r_c = int(220 - intensity * 180)
-                    g_c = int(240 - intensity * 80)
-                    b_c = int(255 - intensity * 60)
-                    color = f'rgb({r_c},{g_c},{b_c})'
-                    text_color = '#fff' if intensity > 0.5 else '#333'
-                else:
-                    color = '#f8f9fa'
-                    text_color = '#ccc'
-                months.append({'value': val, 'color': color, 'text_color': text_color})
-            heatmap_data.append({'year': yr, 'months': months})
-
-    conn.close()
+            for yr, data in sorted(years_dict.items()):
+                months = []
+                for val in data:
+                    if val > 0 and max_val > min_val:
+                        intensity = (val - min_val) / (max_val - min_val)
+                        r_c = int(220 - intensity * 180)
+                        g_c = int(240 - intensity * 80)
+                        b_c = int(255 - intensity * 60)
+                        color = f'rgb({r_c},{g_c},{b_c})'
+                        text_color = '#fff' if intensity > 0.5 else '#333'
+                    else:
+                        color = '#f8f9fa'
+                        text_color = '#ccc'
+                    months.append({'value': int(val), 'color': color, 'text_color': text_color})
+                heatmap_data.append({'year': yr, 'months': months})
+    finally:
+        conn.close()
 
     return render_template('trend.html',
                            yearly_data=yearly_data,
@@ -910,62 +929,69 @@ def trend():
 def calculator():
     user_id = session['user_id']
     conn = get_db()
+    try:
+        # 기존 저장된 계산기 설정값 조회
+        row = conn.execute('SELECT * FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
 
-    # 기존 저장된 계산기 설정값 조회
-    row = conn.execute('SELECT * FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
+        defaults = {
+            'dispensing_fee': 15000000,
+            'dispensing_cut': 0,
+            'non_insurance_fee': 500000,
+            'non_insurance_margin': 1500000,
+            'otc_calc_mode': 'direct',
+            'monthly_otc_net_profit': 8000000,
+            'daily_otc_sales': 1000000,
+            'work_days': 25,
+            'otc_margin_rate': 0.35,
+            'monthly_drug_cost': 45000000,
+            'pharmacist_salary': 4000000,
+            'staff_salary': 2500000,
+            'meal_cost': 300000,
+            'rent_cost': 3300000,
+            'maintenance_cost': 300000,
+            'supplies_cost': 0,
+            'software_cost': 110000,
+            'barcode_cost': 0,
+            'electricity_cost': 250000,
+            'communication_cost': 50000,
+            'water_purifier_cost': 30000,
+            'security_cost': 70000,
+            'tax_accountant_cost': 150000,
+            'association_fee': 50000,
+            'card_fee_rate': 0.02
+        }
 
-    defaults = {
-        'dispensing_fee': 15000000,
-        'dispensing_cut': 0,
-        'non_insurance_fee': 500000,
-        'non_insurance_margin': 1500000,
-        'otc_calc_mode': 'direct',
-        'monthly_otc_net_profit': 8000000,
-        'daily_otc_sales': 1000000,
-        'work_days': 25,
-        'otc_margin_rate': 0.35,
-        'monthly_drug_cost': 45000000,
-        'pharmacist_salary': 4000000,
-        'staff_salary': 2500000,
-        'meal_cost': 300000,
-        'rent_cost': 3300000,
-        'maintenance_cost': 300000,
-        'supplies_cost': 0,
-        'software_cost': 110000,
-        'barcode_cost': 0,
-        'electricity_cost': 250000,
-        'communication_cost': 50000,
-        'water_purifier_cost': 30000,
-        'security_cost': 70000,
-        'tax_accountant_cost': 150000,
-        'association_fee': 50000,
-        'card_fee_rate': 0.02
-    }
+        if row:
+            settings = dict(row)
+            # Decimal→float 변환 (PostgreSQL NUMERIC 타입 대응)
+            for k in ('otc_margin_rate', 'card_fee_rate'):
+                if k in settings and settings[k] is not None:
+                    settings[k] = float(settings[k])
+        else:
+            settings = defaults
 
-    settings = dict(row) if row else defaults
+        # 현재 월 실적 조회 (원클릭 자동 불러오기용)
+        today = datetime.date.today()
+        cur_month_prefix = f"{today.year}-{today.month:02d}"
+        stats_row = conn.execute('''
+            SELECT 
+                COALESCE(SUM(dispensing_fee), 0) as disp,
+                COALESCE(SUM(daily_net_profit), 0) as daily,
+                COALESCE(SUM(non_insurance_margin), 0) as nim,
+                COUNT(*) as days
+            FROM daily_profit
+            WHERE user_id = ? AND date LIKE ?
+        ''', (user_id, cur_month_prefix + '%')).fetchone()
 
-    # 현재 월 실적 조회 (원클릭 자동 불러오기용)
-    today = datetime.date.today()
-    cur_month_prefix = f"{today.year}-{today.month:02d}"
-    stats_row = conn.execute('''
-        SELECT 
-            COALESCE(SUM(dispensing_fee), 0) as disp,
-            COALESCE(SUM(daily_net_profit), 0) as daily,
-            COALESCE(SUM(non_insurance_margin), 0) as nim,
-            COUNT(*) as days
-        FROM daily_profit
-        WHERE user_id = ? AND date LIKE ?
-    ''', (user_id, cur_month_prefix + '%')).fetchone()
-
-    cur_stats = {
-        'has_data': stats_row and (stats_row['disp'] > 0 or stats_row['daily'] > 0),
-        'disp': stats_row['disp'] if stats_row else 0,
-        'daily': stats_row['daily'] if stats_row else 0,
-        'nim': stats_row['nim'] if stats_row else 0,
-        'days': stats_row['days'] if stats_row else 0
-    }
-
-    conn.close()
+        cur_stats = {
+            'has_data': stats_row and (int(stats_row['disp'] or 0) > 0 or int(stats_row['daily'] or 0) > 0),
+            'disp': int(stats_row['disp'] or 0) if stats_row else 0,
+            'daily': int(stats_row['daily'] or 0) if stats_row else 0,
+            'nim': int(stats_row['nim'] or 0) if stats_row else 0,
+            'days': int(stats_row['days'] or 0) if stats_row else 0
+        }
+    finally:
+        conn.close()
     return render_template('calculator.html', settings=settings, cur_stats=cur_stats)
 
 
@@ -975,30 +1001,31 @@ def save_calculator_settings():
     user_id = session['user_id']
     data = request.get_json() or {}
     conn = get_db()
+    try:
+        fields = [
+            'dispensing_fee', 'dispensing_cut', 'non_insurance_fee', 'non_insurance_margin',
+            'otc_calc_mode', 'monthly_otc_net_profit',
+            'daily_otc_sales', 'work_days', 'otc_margin_rate', 'monthly_drug_cost',
+            'pharmacist_salary', 'staff_salary', 'meal_cost', 'rent_cost', 'maintenance_cost',
+            'supplies_cost', 'software_cost', 'barcode_cost', 'electricity_cost',
+            'communication_cost', 'water_purifier_cost', 'security_cost', 'tax_accountant_cost',
+            'association_fee', 'card_fee_rate'
+        ]
 
-    fields = [
-        'dispensing_fee', 'dispensing_cut', 'non_insurance_fee', 'non_insurance_margin',
-        'otc_calc_mode', 'monthly_otc_net_profit',
-        'daily_otc_sales', 'work_days', 'otc_margin_rate', 'monthly_drug_cost',
-        'pharmacist_salary', 'staff_salary', 'meal_cost', 'rent_cost', 'maintenance_cost',
-        'supplies_cost', 'software_cost', 'barcode_cost', 'electricity_cost',
-        'communication_cost', 'water_purifier_cost', 'security_cost', 'tax_accountant_cost',
-        'association_fee', 'card_fee_rate'
-    ]
+        existing = conn.execute('SELECT id FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
+        if existing:
+            set_clause = ', '.join([f"{f} = ?" for f in fields])
+            params = [data.get(f, 0) for f in fields] + [user_id]
+            conn.execute(f"UPDATE user_calculator_settings SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", params)
+        else:
+            col_clause = 'user_id, ' + ', '.join(fields)
+            val_clause = '?, ' + ', '.join(['?' for _ in fields])
+            params = [user_id] + [data.get(f, 0) for f in fields]
+            conn.execute(f"INSERT INTO user_calculator_settings ({col_clause}) VALUES ({val_clause})", params)
 
-    existing = conn.execute('SELECT id FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
-    if existing:
-        set_clause = ', '.join([f"{f} = ?" for f in fields])
-        params = [data.get(f, 0) for f in fields] + [user_id]
-        conn.execute(f"UPDATE user_calculator_settings SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", params)
-    else:
-        col_clause = 'user_id, ' + ', '.join(fields)
-        val_clause = '?, ' + ', '.join(['?' for _ in fields])
-        params = [user_id] + [data.get(f, 0) for f in fields]
-        conn.execute(f"INSERT INTO user_calculator_settings ({col_clause}) VALUES ({val_clause})", params)
-
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({'success': True, 'message': '계산기 설정값이 안전하게 저장되었습니다.'})
 
 
@@ -1079,153 +1106,147 @@ def upload_excel():
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
 
         conn = get_db()
-        cursor = conn.cursor()
-        imported_count = 0
-        touched_months = set()
+        try:
+            cursor = conn.cursor()
+            imported_count = 0
+            touched_months = set()
 
-        # [모드 1] 표준 템플릿 양식 감지
-        first_ws = wb.active
-        first_row_vals = [str(first_ws.cell(1, c).value or '') for c in range(1, 7)]
-        is_standard_template = any('날짜' in v for v in first_row_vals) and any('조제' in v for v in first_row_vals)
+            def s_int(v):
+                try:
+                    return int(v) if v else 0
+                except (ValueError, TypeError):
+                    return 0
 
-        if is_standard_template:
-            for r in range(2, first_ws.max_row + 1):
-                raw_date = first_ws.cell(r, 1).value
-                if not raw_date:
-                    continue
-                date_str = str(raw_date)[:10].strip()
-                if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
-                    continue
+            # [모드 1] 표준 템플릿 양식 감지
+            first_ws = wb.active
+            first_row_vals = [str(first_ws.cell(1, c).value or '') for c in range(1, 7)]
+            is_standard_template = any('날짜' in v for v in first_row_vals) and any('조제' in v for v in first_row_vals)
 
-                dow = str(first_ws.cell(r, 2).value or '')
-                def s_int(c):
-                    v = first_ws.cell(r, c).value
-                    try: return int(v) if v else 0
-                    except: return 0
+            if is_standard_template:
+                for r in range(2, first_ws.max_row + 1):
+                    raw_date = first_ws.cell(r, 1).value
+                    if not raw_date:
+                        continue
+                    date_str = str(raw_date)[:10].strip()
+                    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+                        continue
 
-                disp = s_int(3)
-                daily = s_int(4)
-                nim = s_int(5)
-                memo = str(first_ws.cell(r, 6).value or '')
+                    dow = str(first_ws.cell(r, 2).value or '')
+                    disp = s_int(first_ws.cell(r, 3).value)
+                    daily = s_int(first_ws.cell(r, 4).value)
+                    nim = s_int(first_ws.cell(r, 5).value)
+                    memo = str(first_ws.cell(r, 6).value or '')
 
-                dpd = disp + daily
-                tot = dpd + nim
-
-                cursor.execute('''
-                    INSERT OR REPLACE INTO daily_profit
-                    (user_id, date, day_of_week, dispensing_fee, daily_net_profit,
-                     dispensing_plus_daily, non_insurance_margin, total, memo, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-                ''', (user_id, date_str, dow, disp, daily, dpd, nim, tot, memo))
-                imported_count += 1
-                touched_months.add((int(date_str[:4]), int(date_str[5:7])))
-
-            # 변경된 월 통계 자동 재계산
-            for yr, mo in touched_months:
-                recalc_monthly_summary(conn, user_id, yr, mo)
-
-            conn.commit()
-            conn.close()
-            flash(f'🎉 표준 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 데이터가 등록되었습니다)', 'success')
-            return redirect(url_for('dashboard'))
-
-        # [모드 2] 기존 순익표 (주표 + 합계) 시트 구조 처리
-        # 합계 시트 (2번째 시트)
-        if len(wb.sheetnames) >= 2:
-            ws_sum = wb[wb.sheetnames[1]]
-            for r in range(2, ws_sum.max_row + 1):
-                yr = ws_sum.cell(r, 1).value
-                mo_str = str(ws_sum.cell(r, 2).value or '')
-                if yr is None or not isinstance(yr, (int, float)):
-                    continue
-                m_match = re.search(r'(\d+)', mo_str)
-                if not m_match:
-                    continue
-                def s_int(c):
-                    v = ws_sum.cell(r, c).value
-                    try: return int(v) if v else 0
-                    except: return 0
-                dpd = s_int(3)
-                nim = s_int(4)
-                grand = s_int(5)
-                diff = s_int(6)
-                if dpd == 0 and nim == 0 and grand == 0:
-                    continue
-                cursor.execute('''
-                    INSERT OR REPLACE INTO monthly_summary
-                    (user_id, year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (user_id, int(yr), int(m_match.group(1)), dpd, nim, grand, diff))
-
-        # 주표 시트 (1번째 시트)
-        ws_week = wb[wb.sheetnames[0]]
-        current_year = 2022
-        current_month = 10
-        current_start_day = 17
-        day_offset = 0
-        DAY_NAMES = ['월', '화', '수', '목', '금', '토']
-
-        imported_count = 0
-        for r in range(1, ws_week.max_row + 1):
-            cell_a = ws_week.cell(r, 1).value
-            if cell_a is None:
-                day_offset = 0
-                continue
-            cell_a_str = str(cell_a).strip()
-            week_match = re.search(r'(\d+)\s*월?\s*(\d+)\s*일?\s*~', cell_a_str)
-            if week_match:
-                new_month = int(week_match.group(1))
-                current_start_day = int(week_match.group(2))
-                day_offset = 0
-                if new_month < current_month and new_month <= 2 and current_month >= 11:
-                    current_year += 1
-                current_month = new_month
-                continue
-
-            if cell_a_str in DAY_NAMES:
-                def s_int(c):
-                    v = ws_week.cell(r, c).value
-                    try: return int(v) if v else 0
-                    except: return 0
-                d_fee = s_int(2)
-                d_net = s_int(3)
-                dpd = s_int(4)
-                nim = s_int(5)
-                tot = s_int(6)
-                if d_fee == 0 and d_net == 0 and nim == 0 and tot == 0:
-                    day_offset += 1
-                    continue
-                if dpd == 0 and (d_fee > 0 or d_net > 0):
-                    dpd = d_fee + d_net
-                if tot == 0:
+                    dpd = disp + daily
                     tot = dpd + nim
 
-                day = current_start_day + day_offset
-                day_offset += 1
-                act_mo = current_month
-                act_yr = current_year
-                max_d = calendar.monthrange(act_yr, act_mo)[1]
-                if day > max_d:
-                    day -= max_d
-                    act_mo += 1
-                    if act_mo > 12:
-                        act_mo = 1
-                        act_yr += 1
-                try:
-                    dt = datetime.date(act_yr, act_mo, day)
                     cursor.execute('''
                         INSERT OR REPLACE INTO daily_profit
                         (user_id, date, day_of_week, dispensing_fee, daily_net_profit,
-                         dispensing_plus_daily, non_insurance_margin, total, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-                    ''', (user_id, dt.isoformat(), cell_a_str, d_fee, d_net, dpd, nim, tot))
+                         dispensing_plus_daily, non_insurance_margin, total, memo, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                    ''', (user_id, date_str, dow, disp, daily, dpd, nim, tot, memo))
                     imported_count += 1
-                except ValueError:
-                    pass
+                    touched_months.add((int(date_str[:4]), int(date_str[5:7])))
 
-        conn.commit()
-        conn.close()
-        flash(f'🎉 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 순익 데이터가 등록되었습니다)', 'success')
+                # 변경된 월 통계 자동 재계산
+                for yr, mo in touched_months:
+                    recalc_monthly_summary(conn, user_id, yr, mo)
+
+                conn.commit()
+                flash(f'🎉 표준 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 데이터가 등록되었습니다)', 'success')
+                return redirect(url_for('dashboard'))
+
+            # [모드 2] 기존 순익표 (주표 + 합계) 시트 구조 처리
+            # 합계 시트 (2번째 시트)
+            if len(wb.sheetnames) >= 2:
+                ws_sum = wb[wb.sheetnames[1]]
+                for r in range(2, ws_sum.max_row + 1):
+                    yr = ws_sum.cell(r, 1).value
+                    mo_str = str(ws_sum.cell(r, 2).value or '')
+                    if yr is None or not isinstance(yr, (int, float)):
+                        continue
+                    m_match = re.search(r'(\d+)', mo_str)
+                    if not m_match:
+                        continue
+                    dpd = s_int(ws_sum.cell(r, 3).value)
+                    nim = s_int(ws_sum.cell(r, 4).value)
+                    grand = s_int(ws_sum.cell(r, 5).value)
+                    diff = s_int(ws_sum.cell(r, 6).value)
+                    if dpd == 0 and nim == 0 and grand == 0:
+                        continue
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO monthly_summary
+                        (user_id, year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (user_id, int(yr), int(m_match.group(1)), dpd, nim, grand, diff))
+
+            # 주표 시트 (1번째 시트)
+            ws_week = wb[wb.sheetnames[0]]
+            current_year = 2022
+            current_month = 10
+            current_start_day = 17
+            day_offset = 0
+            DAY_NAMES = ['월', '화', '수', '목', '금', '토']
+
+            imported_count = 0
+            for r in range(1, ws_week.max_row + 1):
+                cell_a = ws_week.cell(r, 1).value
+                if cell_a is None:
+                    day_offset = 0
+                    continue
+                cell_a_str = str(cell_a).strip()
+                week_match = re.search(r'(\d+)\s*월?\s*(\d+)\s*일?\s*~', cell_a_str)
+                if week_match:
+                    new_month = int(week_match.group(1))
+                    current_start_day = int(week_match.group(2))
+                    day_offset = 0
+                    if new_month < current_month and new_month <= 2 and current_month >= 11:
+                        current_year += 1
+                    current_month = new_month
+                    continue
+
+                if cell_a_str in DAY_NAMES:
+                    d_fee = s_int(ws_week.cell(r, 2).value)
+                    d_net = s_int(ws_week.cell(r, 3).value)
+                    dpd = s_int(ws_week.cell(r, 4).value)
+                    nim = s_int(ws_week.cell(r, 5).value)
+                    tot = s_int(ws_week.cell(r, 6).value)
+                    if d_fee == 0 and d_net == 0 and nim == 0 and tot == 0:
+                        day_offset += 1
+                        continue
+                    if dpd == 0 and (d_fee > 0 or d_net > 0):
+                        dpd = d_fee + d_net
+                    if tot == 0:
+                        tot = dpd + nim
+
+                    day = current_start_day + day_offset
+                    day_offset += 1
+                    act_mo = current_month
+                    act_yr = current_year
+                    max_d = calendar.monthrange(act_yr, act_mo)[1]
+                    if day > max_d:
+                        day -= max_d
+                        act_mo += 1
+                        if act_mo > 12:
+                            act_mo = 1
+                            act_yr += 1
+                    try:
+                        dt = datetime.date(act_yr, act_mo, day)
+                        cursor.execute('''
+                            INSERT OR REPLACE INTO daily_profit
+                            (user_id, date, day_of_week, dispensing_fee, daily_net_profit,
+                             dispensing_plus_daily, non_insurance_margin, total, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                        ''', (user_id, dt.isoformat(), cell_a_str, d_fee, d_net, dpd, nim, tot))
+                        imported_count += 1
+                    except ValueError:
+                        pass
+
+            conn.commit()
+            flash(f'🎉 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 순익 데이터가 등록되었습니다)', 'success')
+        finally:
+            conn.close()
     except Exception as e:
         flash(f'엑셀 가져오기 실패: {str(e)}', 'danger')
 
@@ -1260,8 +1281,10 @@ def admin_dashboard():
 def admin_switch_user(target_user_id):
     """관리자가 특정 약국의 계정으로 전환하여 데이터를 점검/둘러보기"""
     conn = get_db()
-    target_user = conn.execute('SELECT * FROM users WHERE id = ?', (target_user_id,)).fetchone()
-    conn.close()
+    try:
+        target_user = conn.execute('SELECT * FROM users WHERE id = ?', (target_user_id,)).fetchone()
+    finally:
+        conn.close()
 
     if not target_user:
         flash('존재하지 않는 회원입니다.', 'danger')
@@ -1281,13 +1304,16 @@ def admin_switch_user(target_user_id):
 
 
 @app.route('/admin/switch_back')
+@login_required
 def admin_switch_back():
     """관리자 원래 계정으로 복귀"""
     if 'original_admin_id' in session:
         admin_id = session['original_admin_id']
         conn = get_db()
-        admin_user = conn.execute('SELECT * FROM users WHERE id = ?', (admin_id,)).fetchone()
-        conn.close()
+        try:
+            admin_user = conn.execute('SELECT * FROM users WHERE id = ?', (admin_id,)).fetchone()
+        finally:
+            conn.close()
 
         if admin_user:
             session['user_id'] = admin_user['id']
@@ -1306,8 +1332,10 @@ def admin_switch_back():
 def admin_delete_user(target_user_id):
     """테스트 계정 또는 회원 데이터 삭제"""
     conn = get_db()
-    target_user = conn.execute('SELECT * FROM users WHERE id = ?', (target_user_id,)).fetchone()
-    conn.close()
+    try:
+        target_user = conn.execute('SELECT * FROM users WHERE id = ?', (target_user_id,)).fetchone()
+    finally:
+        conn.close()
 
     if not target_user:
         flash('해당 회원을 찾을 수 없습니다.', 'danger')
@@ -1327,8 +1355,8 @@ def admin_delete_user(target_user_id):
 @admin_required
 def admin_export_backup():
     """관리자 전용: 전체 약국 회원 및 순익 데이터 원클릭 엑셀 백업 다운로드"""
+    conn = None
     try:
-        from urllib.parse import quote
         conn = get_db()
         wb = openpyxl.Workbook()
 
@@ -1374,8 +1402,6 @@ def admin_export_backup():
                 m['dispensing_plus_daily_total'], m['non_insurance_total'], m['grand_total'], m['prev_month_diff']
             ])
 
-        conn.close()
-
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
@@ -1395,6 +1421,9 @@ def admin_export_backup():
     except Exception as e:
         flash(f'DB 백업 파일 생성 중 오류 발생: {str(e)}', 'danger')
         return redirect(url_for('admin_dashboard'))
+    finally:
+        if conn:
+            conn.close()
 
 
 if __name__ == '__main__':

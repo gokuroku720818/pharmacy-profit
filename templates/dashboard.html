@@ -10,7 +10,7 @@
             <div class="card-body">
                 <div class="card-icon"><i class="fas fa-prescription-bottle-alt"></i></div>
                 <h6 class="card-subtitle">조제+일매순익</h6>
-                <h3 class="card-title">{{ "{:,}".format(current_month.dispensing_plus_daily|default(0)) }}원</h3>
+                <h3 class="card-title">{{ "{:,}".format(current_month.dispensing_plus_daily|default(0, true)) }}원</h3>
             </div>
         </div>
     </div>
@@ -19,7 +19,7 @@
             <div class="card-body">
                 <div class="card-icon"><i class="fas fa-pills"></i></div>
                 <h6 class="card-subtitle">비보험약가차액</h6>
-                <h3 class="card-title">{{ "{:,}".format(current_month.non_insurance|default(0)) }}원</h3>
+                <h3 class="card-title">{{ "{:,}".format(current_month.non_insurance|default(0, true)) }}원</h3>
             </div>
         </div>
     </div>
@@ -28,18 +28,18 @@
             <div class="card-body">
                 <div class="card-icon"><i class="fas fa-coins"></i></div>
                 <h6 class="card-subtitle">전체 합계</h6>
-                <h3 class="card-title">{{ "{:,}".format(current_month.grand_total|default(0)) }}원</h3>
+                <h3 class="card-title">{{ "{:,}".format(current_month.grand_total|default(0, true)) }}원</h3>
             </div>
         </div>
     </div>
     <div class="col-md-3">
-        <div class="card summary-card {% if (current_month.diff|default(0)) >= 0 %}bg-warning{% else %}bg-danger{% endif %} text-white">
+        <div class="card summary-card {% if (current_month.diff|default(0, true)) >= 0 %}bg-warning{% else %}bg-danger{% endif %} text-white">
             <div class="card-body">
                 <div class="card-icon">
-                    <i class="fas {% if (current_month.diff|default(0)) >= 0 %}fa-arrow-up{% else %}fa-arrow-down{% endif %}"></i>
+                    <i class="fas {% if (current_month.diff|default(0, true)) >= 0 %}fa-arrow-up{% else %}fa-arrow-down{% endif %}"></i>
                 </div>
                 <h6 class="card-subtitle">전월 대비</h6>
-                <h3 class="card-title">{{ "{:+,}".format(current_month.diff|default(0)) }}원</h3>
+                <h3 class="card-title">{{ "{:+,}".format(current_month.diff|default(0, true)) }}원</h3>
             </div>
         </div>
     </div>

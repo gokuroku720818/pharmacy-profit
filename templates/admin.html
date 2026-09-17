@@ -115,7 +115,7 @@
                                     <i class="fas fa-eye"></i> 대시보드 열람
                                 </a>
                                 {% if u.username != 'admin' and u.id != 1 %}
-                                <form method="POST" action="/admin/delete_user/{{ u.id }}" class="d-inline" onsubmit="return confirm('정말 [{{ u.pharmacy_name }}] 계정과 모든 데이터를 영구 삭제하시겠습니까?');">
+                                <form method="POST" action="/admin/delete_user/{{ u.id }}" class="d-inline delete-user-form" data-pharmacy="{{ u.pharmacy_name|e }}" onsubmit="return confirm('정말 [' + this.dataset.pharmacy + '] 계정과 모든 데이터를 영구 삭제하시겠습니까?');">
                                     <button type="submit" class="btn btn-outline-danger ms-1" title="계정 및 데이터 삭제">
                                         <i class="fas fa-trash-alt"></i>
                                     </button>
