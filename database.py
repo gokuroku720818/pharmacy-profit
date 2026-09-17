@@ -508,41 +508,51 @@ def init_postgres_db(db_url):
 
 def recalc_monthly_summary(conn, user_id, year, month):
     """특정 사용자의 특정 월 합계를 재계산"""
-    cursor = conn.cursor()
-    date_prefix = f"{year}-{month:02d}"
+    try:
+        cursor = conn.cursor()
+        date_prefix = f"{year}-{month:02d}"
 
-    row = cursor.execute('''
-        SELECT
-            COALESCE(SUM(dispensing_plus_daily), 0) as dpd,
-            COALESCE(SUM(non_insurance_margin), 0) as nim,
-            COALESCE(SUM(total), 0) as gt
-        FROM daily_profit
-        WHERE user_id = ? AND date LIKE ?
-    ''', (user_id, date_prefix + '%',)).fetchone()
+        row = cursor.execute('''
+            SELECT
+                COALESCE(SUM(dispensing_plus_daily), 0) as dpd,
+                COALESCE(SUM(non_insurance_margin), 0) as nim,
+                COALESCE(SUM(total), 0) as gt
+            FROM daily_profit
+            WHERE user_id = ? AND date LIKE ?
+        ''', (user_id, date_prefix + '%',)).fetchone()
 
-    # 전월 합계
-    prev_month = month - 1
-    prev_year = year
-    if prev_month == 0:
-        prev_month = 12
-        prev_year = year - 1
+        # 전월 합계
+        prev_month = month - 1
+        prev_year = year
+        if prev_month == 0:
+            prev_month = 12
+            prev_year = year - 1
 
-    prev_row = cursor.execute('''
-        SELECT COALESCE(grand_total, 0) as gt
-        FROM monthly_summary
-        WHERE user_id = ? AND year = ? AND month = ?
-    ''', (user_id, prev_year, prev_month)).fetchone()
+        prev_row = cursor.execute('''
+            SELECT COALESCE(grand_total, 0) as gt
+            FROM monthly_summary
+            WHERE user_id = ? AND year = ? AND month = ?
+        ''', (user_id, prev_year, prev_month)).fetchone()
 
-    prev_total = prev_row['gt'] if prev_row else 0
-    diff = row['gt'] - prev_total
+        prev_total = int(prev_row['gt'] or 0) if prev_row else 0
+        dpd = int(row['dpd'] or 0) if row else 0
+        nim = int(row['nim'] or 0) if row else 0
+        gt = int(row['gt'] or 0) if row else 0
+        diff = gt - prev_total
 
-    cursor.execute('''
-        INSERT OR REPLACE INTO monthly_summary
-        (user_id, year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, year, month, row['dpd'], row['nim'], row['gt'], diff))
+        cursor.execute('''
+            INSERT OR REPLACE INTO monthly_summary
+            (user_id, year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, year, month, dpd, nim, gt, diff))
 
-    conn.commit()
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise e
 
 
 def get_all_users_stats():

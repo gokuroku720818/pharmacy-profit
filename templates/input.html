@@ -269,6 +269,7 @@ window.addEventListener('paste', function(e) {
 function handleFile(input, slotIndex) {
     if (input.files && input.files[0]) {
         processImage(input.files[0], slotIndex);
+        input.value = '';
     }
 }
 

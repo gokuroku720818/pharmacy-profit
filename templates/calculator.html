@@ -642,7 +642,19 @@ if (btnLoad) {
 }
 
 // 설정값 영구 저장 로직
+let isSaving = false;
 function saveSettingsToServer() {
+    if (isSaving) return;
+    isSaving = true;
+
+    const btnMain = document.getElementById('btnSaveSettings');
+    const btnSide = document.getElementById('btnSaveSettingsSide');
+    const origMainHtml = btnMain ? btnMain.innerHTML : '';
+    const origSideHtml = btnSide ? btnSide.innerHTML : '';
+
+    if (btnMain) { btnMain.disabled = true; btnMain.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>저장 중...'; }
+    if (btnSide) { btnSide.disabled = true; btnSide.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>저장 중...'; }
+
     const payload = {
         dispensing_fee: getNum('dispensing_fee'),
         dispensing_cut: getNum('dispensing_cut'),
@@ -676,8 +688,19 @@ function saveSettingsToServer() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     })
-    .then(r => r.json())
+    .then(async r => {
+        if (r.redirected || r.status === 401) {
+            alert('로그인 세션이 만료되었습니다. 다시 로그인해 주세요.');
+            location.href = '/login';
+            return null;
+        }
+        if (!r.ok) {
+            throw new Error('서버 응답 오류 (상태 코드: ' + r.status + ')');
+        }
+        return r.json();
+    })
     .then(res => {
+        if (!res) return;
         if (res.success) {
             alert('🎉 ' + res.message);
         } else {
@@ -685,7 +708,12 @@ function saveSettingsToServer() {
         }
     })
     .catch(err => {
-        alert('서버 저장 중 오류가 발생했습니다: ' + err);
+        alert('서버 저장 중 오류가 발생했습니다: ' + (err.message || err));
+    })
+    .finally(() => {
+        isSaving = false;
+        if (btnMain) { btnMain.disabled = false; btnMain.innerHTML = origMainHtml; }
+        if (btnSide) { btnSide.disabled = false; btnSide.innerHTML = origSideHtml; }
     });
 }
 

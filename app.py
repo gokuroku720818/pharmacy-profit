@@ -85,14 +85,14 @@ def get_month_forecast(conn, user_id, year, month):
         (user_id, date_prefix + '%')
     ).fetchall()
 
-    current_total = sum(r['total'] for r in entered_rows)
+    current_total = sum(int(r['total'] or 0) for r in entered_rows)
     entered_days = set(int(r['date'].split('-')[2]) for r in entered_rows)
 
     dow_rows = conn.execute(
         'SELECT day_of_week, AVG(total) as avg_total FROM daily_profit WHERE user_id = ? AND total > 0 GROUP BY day_of_week',
         (user_id,)
     ).fetchall()
-    dow_avg = {r['day_of_week']: int(r['avg_total']) for r in dow_rows}
+    dow_avg = {r['day_of_week']: int(r['avg_total'] or 0) for r in dow_rows}
 
     max_days = calendar.monthrange(year, month)[1]
     day_names = ['월', '화', '수', '목', '금', '토', '일']
@@ -119,8 +119,8 @@ def get_month_forecast(conn, user_id, year, month):
         (user_id, year - 1, month)
     ).fetchone()
 
-    last_year_total = prev_year_summary['grand_total'] if prev_year_summary else 0
-    yoy_growth_pct = round(((forecast_total - last_year_total) / last_year_total * 100), 1) if last_year_total > 0 else 0
+    last_year_total = int(prev_year_summary['grand_total'] or 0) if prev_year_summary else 0
+    yoy_growth_pct = float(round(((forecast_total - last_year_total) / float(last_year_total) * 100), 1)) if last_year_total > 0 else 0.0
 
     return {
         'year': year,
@@ -159,19 +159,19 @@ def get_yoy_day_comparison(conn, user_id, date_str=None):
             (user_id, f"{target_dt.year - 1}-{target_dt.month:02d}%", today_row['day_of_week'])
         ).fetchone()
 
-    last_year_total = yoy_row['total'] if yoy_row else 0
+    last_year_total = int(yoy_row['total'] or 0) if yoy_row else 0
     last_year_date = yoy_row['date'] if yoy_row else yoy_date_str
 
-    diff = today_row['total'] - last_year_total
-    growth_pct = round((diff / last_year_total * 100), 1) if last_year_total > 0 else 0
+    diff = int(today_row['total'] or 0) - last_year_total
+    growth_pct = float(round((diff / float(last_year_total) * 100), 1)) if last_year_total > 0 else 0.0
 
     return {
         'current_date': date_str,
         'current_dow': today_row['day_of_week'],
-        'current_total': today_row['total'],
-        'current_dispensing': today_row['dispensing_fee'],
-        'current_daily': today_row['daily_net_profit'],
-        'current_non_insurance': today_row['non_insurance_margin'],
+        'current_total': int(today_row['total'] or 0),
+        'current_dispensing': int(today_row['dispensing_fee'] or 0),
+        'current_daily': int(today_row['daily_net_profit'] or 0),
+        'current_non_insurance': int(today_row['non_insurance_margin'] or 0),
         'yoy_date': last_year_date,
         'yoy_total': last_year_total,
         'diff': diff,
@@ -191,26 +191,26 @@ def get_profit_balance_diagnosis(conn, user_id, year, month):
         FROM daily_profit WHERE user_id = ? AND date LIKE ?
     ''', (user_id, date_prefix + '%')).fetchone()
 
-    total = row['total']
-    disp = row['disp']
-    daily = row['daily']
-    nim = row['nim']
+    total = int(row['total'] or 0)
+    disp = int(row['disp'] or 0)
+    daily = int(row['daily'] or 0)
+    nim = int(row['nim'] or 0)
 
     if total == 0:
         s_row = conn.execute('SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? AND month = ?', (user_id, year, month)).fetchone()
         if s_row and s_row['grand_total'] > 0:
-            total = s_row['grand_total']
-            nim = s_row['non_insurance_total']
-            dpd = s_row['dispensing_plus_daily_total']
+            total = int(s_row['grand_total'] or 0)
+            nim = int(s_row['non_insurance_total'] or 0)
+            dpd = int(s_row['dispensing_plus_daily_total'] or 0)
             disp = int(dpd * 0.6)
             daily = dpd - disp
 
     if total > 0:
-        disp_pct = round((disp / total) * 100, 1)
-        daily_pct = round((daily / total) * 100, 1)
-        nim_pct = round((nim / total) * 100, 1)
+        disp_pct = float(round((disp / total) * 100, 1))
+        daily_pct = float(round((daily / total) * 100, 1))
+        nim_pct = float(round((nim / total) * 100, 1))
     else:
-        disp_pct, daily_pct, nim_pct = 0, 0, 0
+        disp_pct, daily_pct, nim_pct = 0.0, 0.0, 0.0
 
     if disp_pct >= 75:
         status = "warning"
@@ -255,10 +255,10 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast):
 
     dt = datetime.date.fromisoformat(latest_row['date'])
     dow = latest_row['day_of_week']
-    today_total = latest_row['total']
-    disp = latest_row['dispensing_fee']
-    daily = latest_row['daily_net_profit']
-    nim = latest_row['non_insurance_margin']
+    today_total = int(latest_row['total'] or 0)
+    disp = int(latest_row['dispensing_fee'] or 0)
+    daily = int(latest_row['daily_net_profit'] or 0)
+    nim = int(latest_row['non_insurance_margin'] or 0)
 
     # 1. 지난주 같은 요일 비교 (7일 전)
     prev_week_date = (dt - datetime.timedelta(days=7)).isoformat()
@@ -273,7 +273,7 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast):
         'SELECT COALESCE(SUM(total), 0) as cum FROM daily_profit WHERE user_id = ? AND date >= ? AND date <= ?',
         (user_id, f"{cur_month_prefix}-01", latest_row['date'])
     ).fetchone()
-    cur_cum = cur_cum_row['cum'] if cur_cum_row else today_total
+    cur_cum = int(cur_cum_row['cum'] or 0) if cur_cum_row else today_total
 
     prev_m_year = dt.year if dt.month > 1 else dt.year - 1
     prev_m_month = dt.month - 1 if dt.month > 1 else 12
@@ -284,7 +284,7 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast):
         'SELECT COALESCE(SUM(total), 0) as cum FROM daily_profit WHERE user_id = ? AND date >= ? AND date <= ?',
         (user_id, f"{prev_m_prefix}-01", f"{prev_m_prefix}-{prev_m_target_day:02d}")
     ).fetchone()
-    prev_cum = prev_cum_row['cum'] if prev_cum_row else 0
+    prev_cum = int(prev_cum_row['cum'] or 0) if prev_cum_row else 0
 
     # 3. 작년 동월 동기 누적 비교
     last_y_prefix = f"{dt.year - 1}-{dt.month:02d}"
@@ -292,18 +292,19 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast):
         'SELECT COALESCE(SUM(total), 0) as cum FROM daily_profit WHERE user_id = ? AND date >= ? AND date <= ?',
         (user_id, f"{last_y_prefix}-01", f"{last_y_prefix}-{dt.day:02d}")
     ).fetchone()
-    last_y_cum = last_y_cum_row['cum'] if last_y_cum_row else 0
+    last_y_cum = int(last_y_cum_row['cum'] or 0) if last_y_cum_row else 0
 
     paragraphs = []
 
     # 단락 1: 오늘 성과 및 지난주 동요일 비교
     p1 = f"<strong>오늘 우리 약국의 순익은 {today_total:,}원입니다.</strong>"
-    if pw_row and pw_row['total'] > 0:
-        pw_diff = today_total - pw_row['total']
-        pw_pct = round((pw_diff / pw_row['total']) * 100, 1)
+    if pw_row and pw_row['total'] and int(pw_row['total']) > 0:
+        pw_total = int(pw_row['total'])
+        pw_diff = today_total - pw_total
+        pw_pct = float(round((pw_diff / float(pw_total)) * 100, 1))
         dir_txt = "증가하며" if pw_diff >= 0 else "기록하며"
         badge_color = "text-success" if pw_diff >= 0 else "text-danger"
-        p1 += f" 지난주 같은 {dow}요일({pw_row['total']:,}원) 대비 <strong class='{badge_color}'>{pw_pct:+,}% {dir_txt}</strong> 주간 흐름을 힘차게 견인했습니다."
+        p1 += f" 지난주 같은 {dow}요일({pw_total:,}원) 대비 <strong class='{badge_color}'>{pw_pct:+,}% {dir_txt}</strong> 주간 흐름을 힘차게 견인했습니다."
     else:
         p1 += f" 이번 주 {dow}요일 순익 흐름을 안정적으로 이어갔습니다."
     p1 += f" 조제료 {disp:,}원과 함께 매약 순익 {daily:,}원, 비보험 약가차액 {nim:,}원이 조화롭게 어우러진 하루입니다."
@@ -313,14 +314,14 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast):
     p2_items = []
     if prev_cum > 0:
         m_diff = cur_cum - prev_cum
-        m_pct = round((m_diff / prev_cum) * 100, 1)
+        m_pct = float(round((m_diff / float(prev_cum)) * 100, 1))
         m_status = "앞서 달리고 있으며" if m_diff >= 0 else "조금 신중한 흐름이며"
         m_color = "text-success" if m_diff >= 0 else "text-danger"
         p2_items.append(f"<strong>지난달({prev_m_month}월) 같은 시점 누적 대비 <span class='{m_color}'>{m_pct:+,}%</span></strong> {m_status}")
 
     if last_y_cum > 0:
         y_diff = cur_cum - last_y_cum
-        y_pct = round((y_diff / last_y_cum) * 100, 1)
+        y_pct = float(round((y_diff / float(last_y_cum)) * 100, 1))
         y_status = "더 단단해진 성장세" if y_diff >= 0 else "안정적인 방어선"
         y_color = "text-success" if y_diff >= 0 else "text-danger"
         p2_items.append(f"<strong>작년 {dt.month}월 동기 대비 <span class='{y_color}'>{y_pct:+,}%</span></strong> {y_status}를 보여줍니다")
@@ -1183,7 +1184,23 @@ def upload_excel():
 
             # 주표 시트 (1번째 시트)
             ws_week = wb[wb.sheetnames[0]]
-            current_year = 2022
+            
+            # 연도 자동 추론: 1) 합계 시트 최소 연도 -> 2) 파일명 내 연도 -> 3) 기본 2022년
+            inferred_year = None
+            if len(wb.sheetnames) >= 2:
+                sum_years = []
+                for r in range(2, ws_sum.max_row + 1):
+                    yr_v = ws_sum.cell(r, 1).value
+                    if isinstance(yr_v, (int, float)) and 2000 <= int(yr_v) <= 2099:
+                        sum_years.append(int(yr_v))
+                if sum_years:
+                    inferred_year = min(sum_years)
+
+            if not inferred_year:
+                fn_match = re.search(r'(20\d{2})', file.filename or '')
+                inferred_year = int(fn_match.group(1)) if fn_match else 2022
+
+            current_year = inferred_year
             current_month = 10
             current_start_day = 17
             day_offset = 0
@@ -1424,6 +1441,30 @@ def admin_export_backup():
     finally:
         if conn:
             conn.close()
+
+
+# ==========================================
+# 🛡️ 전역 에러 핸들러
+# ==========================================
+
+@app.errorhandler(404)
+def page_not_found(e):
+    return render_template(
+        'error.html',
+        error_code=404,
+        error_title='페이지를 찾을 수 없습니다',
+        error_message='요청하신 주소가 잘못되었거나 변경된 페이지입니다.'
+    ), 404
+
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return render_template(
+        'error.html',
+        error_code=500,
+        error_title='시스템 일시 오류가 발생했습니다',
+        error_message='요청을 처리하는 도중 일시적인 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.'
+    ), 500
 
 
 if __name__ == '__main__':

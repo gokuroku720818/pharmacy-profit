@@ -125,9 +125,30 @@
                     <script>
                     function copyAiPrompt() {
                         const txt = document.getElementById('aiPromptText').textContent.replace(/"/g, '');
-                        navigator.clipboard.writeText(txt).then(() => {
-                            alert('AI 프롬프트가 복사되었습니다! ChatGPT나 Claude에 붙여넣어 사용하세요.');
-                        });
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(txt).then(() => {
+                                alert('🎉 AI 프롬프트가 복사되었습니다! ChatGPT나 Claude에 붙여넣어 사용하세요.');
+                            }).catch(() => fallbackCopyText(txt));
+                        } else {
+                            fallbackCopyText(txt);
+                        }
+                    }
+
+                    function fallbackCopyText(text) {
+                        const textArea = document.createElement('textarea');
+                        textArea.value = text;
+                        textArea.style.position = 'fixed';
+                        textArea.style.left = '-9999px';
+                        document.body.appendChild(textArea);
+                        textArea.focus();
+                        textArea.select();
+                        try {
+                            document.execCommand('copy');
+                            alert('🎉 AI 프롬프트가 복사되었습니다! ChatGPT나 Claude에 붙여넣어 사용하세요.');
+                        } catch (err) {
+                            alert('클립보드 복사에 실패했습니다. 텍스트를 직접 복사해 주세요.');
+                        }
+                        document.body.removeChild(textArea);
                     }
                     </script>
                     <div class="modal-footer bg-light">
