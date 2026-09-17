@@ -78,6 +78,23 @@
 </div>
 {% endif %}
 
+<!-- 📜 AI 경영 브리핑 리포트 -->
+{% if narrative_briefing %}
+<div class="card border-0 shadow-sm mb-4" style="background: #f8fafc; border-left: 5px solid #3b82f6 !important;">
+    <div class="card-body p-4">
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <span class="badge bg-primary px-3 py-2"><i class="fas fa-feather-alt me-1"></i> AI 경영 브리핑</span>
+            <span class="text-muted small fw-bold">{{ narrative_briefing.date_title }} 순익 흐름 분석</span>
+        </div>
+        <div class="text-dark" style="line-height: 1.85; font-size: 0.98rem;">
+            {% for para in narrative_briefing.paragraphs %}
+            <p class="mb-2">{{ para|safe }}</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- ⚖️ 2. 작년 오늘 vs 올해 오늘 & 💊 3. 황금비율 진단 -->
 <div class="row g-3 mb-4">
     <!-- 작년 동요일 비교 -->

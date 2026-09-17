@@ -240,6 +240,103 @@ def get_profit_balance_diagnosis(conn, user_id, year, month):
     }
 
 
+def get_ai_narrative_briefing(conn, user_id, current_month, forecast):
+    """대시보드: 시적이고 감성적인 AI 경영 브리핑 리포트 생성"""
+    latest_row = conn.execute(
+        'SELECT * FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 1',
+        (user_id,)
+    ).fetchone()
+
+    if not latest_row:
+        return None
+
+    dt = datetime.date.fromisoformat(latest_row['date'])
+    dow = latest_row['day_of_week']
+    today_total = latest_row['total']
+    disp = latest_row['dispensing_fee']
+    daily = latest_row['daily_net_profit']
+    nim = latest_row['non_insurance_margin']
+
+    # 1. 지난주 같은 요일 비교 (7일 전)
+    prev_week_date = (dt - datetime.timedelta(days=7)).isoformat()
+    pw_row = conn.execute(
+        'SELECT total FROM daily_profit WHERE user_id = ? AND date = ?',
+        (user_id, prev_week_date)
+    ).fetchone()
+
+    # 2. 이번 달 누적 vs 지난달(전월) 동기 누적 비교
+    cur_month_prefix = f"{dt.year}-{dt.month:02d}"
+    cur_cum_row = conn.execute(
+        'SELECT COALESCE(SUM(total), 0) as cum FROM daily_profit WHERE user_id = ? AND date >= ? AND date <= ?',
+        (user_id, f"{cur_month_prefix}-01", latest_row['date'])
+    ).fetchone()
+    cur_cum = cur_cum_row['cum'] if cur_cum_row else today_total
+
+    prev_m_year = dt.year if dt.month > 1 else dt.year - 1
+    prev_m_month = dt.month - 1 if dt.month > 1 else 12
+    prev_m_prefix = f"{prev_m_year}-{prev_m_month:02d}"
+    prev_m_target_day = min(dt.day, calendar.monthrange(prev_m_year, prev_m_month)[1])
+
+    prev_cum_row = conn.execute(
+        'SELECT COALESCE(SUM(total), 0) as cum FROM daily_profit WHERE user_id = ? AND date >= ? AND date <= ?',
+        (user_id, f"{prev_m_prefix}-01", f"{prev_m_prefix}-{prev_m_target_day:02d}")
+    ).fetchone()
+    prev_cum = prev_cum_row['cum'] if prev_cum_row else 0
+
+    # 3. 작년 동월 동기 누적 비교
+    last_y_prefix = f"{dt.year - 1}-{dt.month:02d}"
+    last_y_cum_row = conn.execute(
+        'SELECT COALESCE(SUM(total), 0) as cum FROM daily_profit WHERE user_id = ? AND date >= ? AND date <= ?',
+        (user_id, f"{last_y_prefix}-01", f"{last_y_prefix}-{dt.day:02d}")
+    ).fetchone()
+    last_y_cum = last_y_cum_row['cum'] if last_y_cum_row else 0
+
+    paragraphs = []
+
+    # 단락 1: 오늘 성과 및 지난주 동요일 비교
+    p1 = f"<strong>오늘 우리 약국의 순익은 {today_total:,}원입니다.</strong>"
+    if pw_row and pw_row['total'] > 0:
+        pw_diff = today_total - pw_row['total']
+        pw_pct = round((pw_diff / pw_row['total']) * 100, 1)
+        dir_txt = "증가하며" if pw_diff >= 0 else "기록하며"
+        badge_color = "text-success" if pw_diff >= 0 else "text-danger"
+        p1 += f" 지난주 같은 {dow}요일({pw_row['total']:,}원) 대비 <strong class='{badge_color}'>{pw_pct:+,}% {dir_txt}</strong> 주간 흐름을 힘차게 견인했습니다."
+    else:
+        p1 += f" 이번 주 {dow}요일 순익 흐름을 안정적으로 이어갔습니다."
+    p1 += f" 조제료 {disp:,}원과 함께 매약 순익 {daily:,}원, 비보험 약가차액 {nim:,}원이 조화롭게 어우러진 하루입니다."
+    paragraphs.append(p1)
+
+    # 단락 2: 지난달 및 작년 비교
+    p2_items = []
+    if prev_cum > 0:
+        m_diff = cur_cum - prev_cum
+        m_pct = round((m_diff / prev_cum) * 100, 1)
+        m_status = "앞서 달리고 있으며" if m_diff >= 0 else "조금 신중한 흐름이며"
+        m_color = "text-success" if m_diff >= 0 else "text-danger"
+        p2_items.append(f"<strong>지난달({prev_m_month}월) 같은 시점 누적 대비 <span class='{m_color}'>{m_pct:+,}%</span></strong> {m_status}")
+
+    if last_y_cum > 0:
+        y_diff = cur_cum - last_y_cum
+        y_pct = round((y_diff / last_y_cum) * 100, 1)
+        y_status = "더 단단해진 성장세" if y_diff >= 0 else "안정적인 방어선"
+        y_color = "text-success" if y_diff >= 0 else "text-danger"
+        p2_items.append(f"<strong>작년 {dt.month}월 동기 대비 <span class='{y_color}'>{y_pct:+,}%</span></strong> {y_status}를 보여줍니다")
+
+    if p2_items:
+        paragraphs.append("시야를 넓혀보면, " + ", ".join(p2_items) + ".")
+
+    # 단락 3: 월말 고지 전망
+    forecast_total = forecast.get('forecast_total', 0) if forecast else 0
+    if forecast_total > 0:
+        forecast_man = int(forecast_total / 10000)
+        paragraphs.append(f"현재 페이스를 유지한다면 이번 {dt.month}월은 <strong>월말 예상 순익 약 {forecast_man:,}만 원 고지</strong>를 달성할 것으로 전망됩니다. 오늘도 묵묵히 자리를 지키며 일궈내신 소중한 성과입니다.")
+
+    return {
+        'date_title': f"{dt.month}월 {dt.day}일 ({dow})",
+        'paragraphs': paragraphs
+    }
+
+
 # ==========================================
 # 🔑 인증 라우트 (회원가입, 로그인, 로그아웃)
 # ==========================================
@@ -356,6 +453,7 @@ def dashboard():
     forecast = get_month_forecast(conn, user_id, current_month['year'], current_month['month'])
     yoy_day = get_yoy_day_comparison(conn, user_id)
     balance = get_profit_balance_diagnosis(conn, user_id, current_month['year'], current_month['month'])
+    narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast)
 
     conn.close()
 
@@ -366,7 +464,8 @@ def dashboard():
                            year_compare=year_compare,
                            forecast=forecast,
                            yoy_day=yoy_day,
-                           balance=balance)
+                           balance=balance,
+                           narrative_briefing=narrative_briefing)
 
 
 @app.route('/input', methods=['GET', 'POST'])
