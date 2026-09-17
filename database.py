@@ -270,6 +270,8 @@ def init_sqlite_db():
             dispensing_cut INTEGER DEFAULT 0,
             non_insurance_fee INTEGER DEFAULT 0,
             non_insurance_margin INTEGER DEFAULT 0,
+            otc_calc_mode TEXT DEFAULT 'direct',
+            monthly_otc_net_profit INTEGER DEFAULT 8000000,
             daily_otc_sales INTEGER DEFAULT 0,
             work_days INTEGER DEFAULT 25,
             otc_margin_rate REAL DEFAULT 0.35,
@@ -293,6 +295,16 @@ def init_sqlite_db():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     ''')
+
+    # SQLite 컬럼 안전 추가 (기존 테이블 호환)
+    try:
+        cursor.execute("ALTER TABLE user_calculator_settings ADD COLUMN otc_calc_mode TEXT DEFAULT 'direct'")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE user_calculator_settings ADD COLUMN monthly_otc_net_profit INTEGER DEFAULT 8000000")
+    except Exception:
+        pass
 
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date ON daily_profit(user_id, date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_ym ON monthly_summary(user_id, year, month)')
@@ -361,6 +373,8 @@ def init_postgres_db(db_url):
             dispensing_cut BIGINT DEFAULT 0,
             non_insurance_fee BIGINT DEFAULT 0,
             non_insurance_margin BIGINT DEFAULT 0,
+            otc_calc_mode VARCHAR(20) DEFAULT 'direct',
+            monthly_otc_net_profit BIGINT DEFAULT 8000000,
             daily_otc_sales BIGINT DEFAULT 0,
             work_days INT DEFAULT 25,
             otc_margin_rate NUMERIC(5,4) DEFAULT 0.35,
@@ -383,6 +397,13 @@ def init_postgres_db(db_url):
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # PostgreSQL 컬럼 안전 추가 (기존 테이블 호환)
+    try:
+        cur.execute("ALTER TABLE user_calculator_settings ADD COLUMN IF NOT EXISTS otc_calc_mode VARCHAR(20) DEFAULT 'direct'")
+        cur.execute("ALTER TABLE user_calculator_settings ADD COLUMN IF NOT EXISTS monthly_otc_net_profit BIGINT DEFAULT 8000000")
+    except Exception:
+        pass
 
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_date ON daily_profit(user_id, date)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_ym ON monthly_summary(user_id, year, month)')

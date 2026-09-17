@@ -767,6 +767,8 @@ def calculator():
         'dispensing_cut': 0,
         'non_insurance_fee': 500000,
         'non_insurance_margin': 1500000,
+        'otc_calc_mode': 'direct',
+        'monthly_otc_net_profit': 8000000,
         'daily_otc_sales': 1000000,
         'work_days': 25,
         'otc_margin_rate': 0.35,
@@ -824,6 +826,7 @@ def save_calculator_settings():
 
     fields = [
         'dispensing_fee', 'dispensing_cut', 'non_insurance_fee', 'non_insurance_margin',
+        'otc_calc_mode', 'monthly_otc_net_profit',
         'daily_otc_sales', 'work_days', 'otc_margin_rate', 'monthly_drug_cost',
         'pharmacist_salary', 'staff_salary', 'meal_cost', 'rent_cost', 'maintenance_cost',
         'supplies_cost', 'software_cost', 'barcode_cost', 'electricity_cost',
