@@ -971,6 +971,80 @@ def admin_delete_user(target_user_id):
     return redirect(url_for('admin_dashboard'))
 
 
+@app.route('/admin/export_backup')
+@admin_required
+def admin_export_backup():
+    """관리자 전용: 전체 약국 회원 및 순익 데이터 원클릭 엑셀 백업 다운로드"""
+    try:
+        from urllib.parse import quote
+        conn = get_db()
+        wb = openpyxl.Workbook()
+
+        # 1. 회원 목록 시트
+        ws_users = wb.active
+        ws_users.title = "약국회원목록"
+        ws_users.append(["회원번호(ID)", "아이디", "약국명", "가입일시"])
+        users = conn.execute("SELECT id, username, pharmacy_name, created_at FROM users ORDER BY id").fetchall()
+        for u in users:
+            ws_users.append([u['id'], u['username'], u['pharmacy_name'], str(u['created_at'])[:19] if u['created_at'] else ''])
+
+        # 2. 일별 순익 데이터 시트
+        ws_daily = wb.create_sheet(title="일별순익전체")
+        ws_daily.append(["회원ID", "약국명", "날짜", "요일", "조제료", "일매순익", "조제+일매", "비보험약가차액", "전체합계", "메모"])
+        daily_rows = conn.execute('''
+            SELECT d.user_id, u.pharmacy_name, d.date, d.day_of_week, 
+                   d.dispensing_fee, d.daily_net_profit, d.dispensing_plus_daily, 
+                   d.non_insurance_margin, d.total, d.memo
+            FROM daily_profit d
+            LEFT JOIN users u ON d.user_id = u.id
+            ORDER BY d.user_id, d.date
+        ''').fetchall()
+        for r in daily_rows:
+            ws_daily.append([
+                r['user_id'], r['pharmacy_name'], r['date'], r['day_of_week'],
+                r['dispensing_fee'], r['daily_net_profit'], r['dispensing_plus_daily'],
+                r['non_insurance_margin'], r['total'], r['memo'] or ''
+            ])
+
+        # 3. 월별 요약 시트
+        ws_monthly = wb.create_sheet(title="월별요약전체")
+        ws_monthly.append(["회원ID", "약국명", "연도", "월", "조제+일매합계", "비보험합계", "전체합계", "전월대비증감"])
+        monthly_rows = conn.execute('''
+            SELECT m.user_id, u.pharmacy_name, m.year, m.month,
+                   m.dispensing_plus_daily_total, m.non_insurance_total, m.grand_total, m.prev_month_diff
+            FROM monthly_summary m
+            LEFT JOIN users u ON m.user_id = u.id
+            ORDER BY m.user_id, m.year, m.month
+        ''').fetchall()
+        for m in monthly_rows:
+            ws_monthly.append([
+                m['user_id'], m['pharmacy_name'], m['year'], m['month'],
+                m['dispensing_plus_daily_total'], m['non_insurance_total'], m['grand_total'], m['prev_month_diff']
+            ])
+
+        conn.close()
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"약국순익관리_전체DB백업_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        encoded_filename = quote(filename)
+
+        response = send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+        response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{encoded_filename}"
+        return response
+
+    except Exception as e:
+        flash(f'DB 백업 파일 생성 중 오류 발생: {str(e)}', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+
 if __name__ == '__main__':
     init_db()
     print("\n=== 약국 순익 관리 시스템 (다중 약국 온라인 SaaS) 시작 ===")
