@@ -1,25 +1,158 @@
 import sqlite3
 import os
+import re
 from werkzeug.security import generate_password_hash
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'data', 'sales.db')
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:
+    psycopg2 = None
+
+SQLITE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'sales.db')
+
+
+def get_database_url():
+    url = os.environ.get('DATABASE_URL')
+    if url and url.startswith('postgres://'):
+        url = url.replace('postgres://', 'postgresql://', 1)
+    return url
+
+
+def is_postgres():
+    return bool(get_database_url() and psycopg2)
+
+
+def adapt_sql_for_postgres(sql):
+    """SQLite 전용 쿼리를 PostgreSQL 문법으로 호환 변환"""
+    sql = sql.replace('?', '%s')
+    sql = sql.replace("datetime('now', 'localtime')", "NOW()")
+
+    # 1. INSERT OR REPLACE INTO daily_profit
+    if 'INSERT OR REPLACE INTO daily_profit' in sql:
+        m = re.search(r'INSERT OR REPLACE INTO daily_profit\s*\((.*?)\)\s*VALUES\s*\((.*?)\)', sql, re.DOTALL | re.IGNORECASE)
+        if m:
+            cols = m.group(1)
+            vals = m.group(2)
+            sql = f"""
+                INSERT INTO daily_profit ({cols})
+                VALUES ({vals})
+                ON CONFLICT (user_id, date) DO UPDATE SET
+                    day_of_week = EXCLUDED.day_of_week,
+                    dispensing_fee = EXCLUDED.dispensing_fee,
+                    daily_net_profit = EXCLUDED.daily_net_profit,
+                    dispensing_plus_daily = EXCLUDED.dispensing_plus_daily,
+                    non_insurance_margin = EXCLUDED.non_insurance_margin,
+                    total = EXCLUDED.total,
+                    memo = COALESCE(EXCLUDED.memo, daily_profit.memo),
+                    updated_at = NOW()
+            """
+
+    # 2. INSERT OR REPLACE INTO monthly_summary
+    elif 'INSERT OR REPLACE INTO monthly_summary' in sql:
+        m = re.search(r'INSERT OR REPLACE INTO monthly_summary\s*\((.*?)\)\s*VALUES\s*\((.*?)\)', sql, re.DOTALL | re.IGNORECASE)
+        if m:
+            cols = m.group(1)
+            vals = m.group(2)
+            sql = f"""
+                INSERT INTO monthly_summary ({cols})
+                VALUES ({vals})
+                ON CONFLICT (user_id, year, month) DO UPDATE SET
+                    dispensing_plus_daily_total = EXCLUDED.dispensing_plus_daily_total,
+                    non_insurance_total = EXCLUDED.non_insurance_total,
+                    grand_total = EXCLUDED.grand_total,
+                    prev_month_diff = EXCLUDED.prev_month_diff
+            """
+
+    # 3. INSERT INTO users (RETURNING id 로 lastrowid 지원)
+    elif 'INSERT INTO users' in sql and 'RETURNING id' not in sql:
+        sql = sql.rstrip().rstrip(';') + ' RETURNING id'
+
+    return sql
+
+
+class PostgresCursorWrapper:
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self.lastrowid = None
+
+    def execute(self, sql, params=None):
+        adapted_sql = adapt_sql_for_postgres(sql)
+        self.cursor.execute(adapted_sql, params or ())
+        if 'RETURNING id' in adapted_sql:
+            row = self.cursor.fetchone()
+            if row:
+                self.lastrowid = row['id'] if isinstance(row, dict) else row[0]
+        return self
+
+    def fetchone(self):
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        return self.cursor.fetchall()
+
+    def close(self):
+        self.cursor.close()
+
+    @property
+    def description(self):
+        return self.cursor.description
+
+
+class PostgresConnectionWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def cursor(self):
+        return PostgresCursorWrapper(self.conn.cursor())
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
+
+    def close(self):
+        self.conn.close()
 
 
 def get_db():
-    """데이터베이스 연결 반환"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    """데이터베이스 연결 반환 (PostgreSQL 우선, 미설정 시 SQLite)"""
+    db_url = get_database_url()
+    if db_url and psycopg2:
+        pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+        return PostgresConnectionWrapper(pg_conn)
+    else:
+        os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
+        conn = sqlite3.connect(SQLITE_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
 
 
 def init_db():
-    """데이터베이스 테이블 초기화 및 멀티 유저 스키마 마이그레이션"""
-    conn = get_db()
+    """데이터베이스 테이블 초기화 및 마이그레이션"""
+    db_url = get_database_url()
+
+    if db_url and psycopg2:
+        init_postgres_db(db_url)
+    else:
+        init_sqlite_db()
+
+
+def init_sqlite_db():
+    """SQLite 로컬 데이터베이스 초기화"""
+    os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
+    conn = sqlite3.connect(SQLITE_PATH)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    # 1. 사용자(약국) 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +163,6 @@ def init_db():
         )
     ''')
 
-    # 기본 사용자 (약사님 본인 계정) 생성
     admin = cursor.execute('SELECT * FROM users WHERE username = ?', ('admin',)).fetchone()
     if not admin:
         default_hash = generate_password_hash('7581')
@@ -40,7 +172,6 @@ def init_db():
         ''', ('admin', default_hash, '우리약국'))
         print("기본 계정 생성 완료: 아이디=admin, 비번=7581")
 
-    # 2. 일별 순익 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_profit (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +191,6 @@ def init_db():
         )
     ''')
 
-    # 3. 월별 합계 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS monthly_summary (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,19 +206,123 @@ def init_db():
         )
     ''')
 
-    # 기존 컬럼에 user_id가 누락되었을 경우를 대비한 안전한 ALTER TABLE
-    for tbl in ['daily_profit', 'monthly_summary']:
-        cols = [col[1] for col in cursor.execute(f"PRAGMA table_info({tbl})").fetchall()]
-        if 'user_id' not in cols:
-            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN user_id INTEGER DEFAULT 1")
-
-    # 인덱스
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date ON daily_profit(user_id, date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_ym ON monthly_summary(user_id, year, month)')
 
     conn.commit()
     conn.close()
-    print("멀티 유저 데이터베이스 초기화 완료")
+    print("로컬 SQLite DB 초기화 완료")
+
+
+def init_postgres_db(db_url):
+    """PostgreSQL 클라우드 DB 초기화 및 기존 데이터 자동 이관"""
+    conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+    cur = conn.cursor()
+
+    # 1. users 테이블
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(100) NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            pharmacy_name VARCHAR(100) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # 2. daily_profit 테이블
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS daily_profit (
+            id SERIAL PRIMARY KEY,
+            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            date VARCHAR(10) NOT NULL,
+            day_of_week VARCHAR(10) NOT NULL,
+            dispensing_fee BIGINT DEFAULT 0,
+            daily_net_profit BIGINT DEFAULT 0,
+            dispensing_plus_daily BIGINT DEFAULT 0,
+            non_insurance_margin BIGINT DEFAULT 0,
+            total BIGINT DEFAULT 0,
+            memo TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, date)
+        )
+    ''')
+
+    # 3. monthly_summary 테이블
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS monthly_summary (
+            id SERIAL PRIMARY KEY,
+            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            year INT NOT NULL,
+            month INT NOT NULL,
+            dispensing_plus_daily_total BIGINT DEFAULT 0,
+            non_insurance_total BIGINT DEFAULT 0,
+            grand_total BIGINT DEFAULT 0,
+            prev_month_diff BIGINT DEFAULT 0,
+            UNIQUE(user_id, year, month)
+        )
+    ''')
+
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_date ON daily_profit(user_id, date)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_ym ON monthly_summary(user_id, year, month)')
+    conn.commit()
+
+    # 4. 기존 데이터가 비어있다면 로컬 sales.db 에서 Neon DB로 자동 마이그레이션
+    cur.execute('SELECT COUNT(*) as cnt FROM daily_profit')
+    cnt = cur.fetchone()['cnt']
+    if cnt == 0 and os.path.exists(SQLITE_PATH):
+        print("⚡ 클라우드 DB에 기존 데이터 자동 이관 시작...")
+        try:
+            s_conn = sqlite3.connect(SQLITE_PATH)
+            s_conn.row_factory = sqlite3.Row
+
+            # 유저 복사
+            for u in s_conn.execute('SELECT * FROM users').fetchall():
+                cur.execute('''
+                    INSERT INTO users (id, username, password_hash, pharmacy_name, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (username) DO NOTHING
+                ''', (u['id'], u['username'], u['password_hash'], u['pharmacy_name'], u['created_at']))
+
+            # 일별 데이터 복사 (1,175건)
+            dailies = s_conn.execute('SELECT * FROM daily_profit').fetchall()
+            for d in dailies:
+                cur.execute('''
+                    INSERT INTO daily_profit
+                    (id, user_id, date, day_of_week, dispensing_fee, daily_net_profit,
+                     dispensing_plus_daily, non_insurance_margin, total, memo, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, date) DO NOTHING
+                ''', (d['id'], d['user_id'], d['date'], d['day_of_week'], d['dispensing_fee'],
+                      d['daily_net_profit'], d['dispensing_plus_daily'], d['non_insurance_margin'],
+                      d['total'], d['memo'], d['created_at'], d['updated_at']))
+
+            # 월별 요약 복사
+            for m in s_conn.execute('SELECT * FROM monthly_summary').fetchall():
+                cur.execute('''
+                    INSERT INTO monthly_summary
+                    (id, user_id, year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, year, month) DO NOTHING
+                ''', (m['id'], m['user_id'], m['year'], m['month'], m['dispensing_plus_daily_total'],
+                      m['non_insurance_total'], m['grand_total'], m['prev_month_diff']))
+
+            # 시퀀스(ID 자동증가 번호) 동기화
+            cur.execute("SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(MAX(id), 1)) FROM users")
+            cur.execute("SELECT setval(pg_get_serial_sequence('daily_profit', 'id'), COALESCE(MAX(id), 1)) FROM daily_profit")
+            cur.execute("SELECT setval(pg_get_serial_sequence('monthly_summary', 'id'), COALESCE(MAX(id), 1)) FROM monthly_summary")
+
+            conn.commit()
+            s_conn.close()
+            print(f"🎉 성공! 기존 {len(dailies)}일치 순익 데이터가 Neon 클라우드 DB로 영구 보존 이관되었습니다!")
+        except Exception as e:
+            print(f"데이터 자동 마이그레이션 중 오류: {e}")
+            conn.rollback()
+
+    cur.close()
+    conn.close()
+    print("PostgreSQL 클라우드 DB 준비 완료")
 
 
 def recalc_monthly_summary(conn, user_id, year, month):
@@ -127,6 +361,9 @@ def recalc_monthly_summary(conn, user_id, year, month):
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (user_id, year, month, row['dpd'], row['nim'], row['gt'], diff))
 
+    conn.commit()
+
+
 def get_all_users_stats():
     """모든 가입 회원 목록 및 각 약국의 통계 반환 (관리자 전용)"""
     conn = get_db()
@@ -149,10 +386,9 @@ def get_all_users_stats():
 def delete_user_and_data(user_id):
     """특정 회원의 모든 데이터와 계정 삭제 (관리자 전용)"""
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM daily_profit WHERE user_id = ?', (user_id,))
-    cursor.execute('DELETE FROM monthly_summary WHERE user_id = ?', (user_id,))
-    cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+    conn.execute('DELETE FROM daily_profit WHERE user_id = ?', (user_id,))
+    conn.execute('DELETE FROM monthly_summary WHERE user_id = ?', (user_id,))
+    conn.execute('DELETE FROM users WHERE id = ?', (user_id,))
     conn.commit()
     conn.close()
 
