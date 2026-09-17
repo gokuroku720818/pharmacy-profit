@@ -575,6 +575,55 @@ def calendar_view():
     )
 
 
+def generate_annual_narrative_report(year, report_data, year_total, last_year_total, best_month, worst_month, quarterly_data):
+    """연간 경영 결산 줄글 브리핑 리포트 생성"""
+    if not report_data or year_total['grand'] == 0:
+        return None
+
+    months_count = len(report_data)
+    avg_monthly = year_total['grand'] // months_count if months_count > 0 else 0
+    grand_man = int(year_total['grand'] / 10000)
+    avg_man = int(avg_monthly / 10000)
+
+    paragraphs = []
+
+    # 1. 연간 총평 및 전년 대비 성장률
+    p1 = f"<strong>{year}년 우리 약국의 연간 누적 순익은 총 {year_total['grand']:,}원(약 {grand_man:,}만 원)</strong>으로, <strong>월평균 {avg_monthly:,}원(약 {avg_man:,}만 원)</strong>의 결실을 거두었습니다."
+    if last_year_total and last_year_total['grand'] > 0:
+        yoy_diff = year_total['grand'] - last_year_total['grand']
+        yoy_pct = round((yoy_diff / last_year_total['grand']) * 100, 1)
+        dir_txt = "성장하며 견고한 상승 궤도" if yoy_diff >= 0 else "안정적인 방어선"
+        color = "text-success" if yoy_diff >= 0 else "text-danger"
+        p1 += f" 이는 전년도({year-1}년) 총순익 대비 <strong class='{color}'>{yoy_pct:+,}% {dir_txt}</strong>를 증명해낸 값진 성과입니다."
+    else:
+        p1 += f" 한 해 동안 흔들림 없는 경영 안정성을 확보하며 탄탄한 실적 기반을 다졌습니다."
+    paragraphs.append(p1)
+
+    # 2. 골든 먼스(최고의 달) 분석
+    if best_month:
+        best_man = int(best_month['grand_total'] / 10000)
+        p2 = f"1년 중 가장 눈부신 성과를 일궈낸 <strong>골든 먼스(Golden Month)는 👑 {best_month['month']}월({best_month['grand_total']:,}원, 약 {best_man:,}만 원)</strong>이었습니다."
+        if worst_month and worst_month['month'] != best_month['month']:
+            worst_man = int(worst_month['grand_total'] / 10000)
+            p2 += f" 상대적으로 숨을 고른 달은 {worst_month['month']}월({worst_month['grand_total']:,}원, 약 {worst_man:,}만 원)이었으나, 연중 큰 부침 없이 월별 실적 방어선이 훌륭하게 작동했습니다."
+        paragraphs.append(p2)
+
+    # 3. 수익 포트폴리오 및 알짜 비보험 기여도
+    nim_pct = round((year_total['nim'] / year_total['grand']) * 100, 1) if year_total['grand'] > 0 else 0
+    dpd_pct = round(100.0 - nim_pct, 1)
+    p3 = f"수익 구성을 들여다보면, 조제료 및 매약 순익이 <strong>{year_total['dpd']:,}원({dpd_pct}%)</strong>으로 든든한 기초 체력을 뒷받침했습니다. 아울러 비보험 약가차액이 <strong>{year_total['nim']:,}원({nim_pct}%)</strong>의 알짜 마진을 창출하며 약국 수익 다각화의 핵심 엔진 역할을 톡톡히 해냈습니다."
+    paragraphs.append(p3)
+
+    # 4. 분기별 실적 흐름 및 제언
+    best_q = max(quarterly_data, key=lambda q: q['total']) if quarterly_data else None
+    if best_q and best_q['total'] > 0:
+        q_pct = round((best_q['total'] / year_total['grand']) * 100, 1)
+        p4 = f"분기별 흐름에서는 <strong>{best_q['quarter']}분기({best_q['total']:,}원, 연간의 {q_pct}%)</strong>의 모멘텀이 가장 강했습니다. 앞으로도 환절기 처방 호조와 함께 매약 상담 기회를 적극 연계하신다면 더욱 높은 수익 고지를 안정적으로 유지하실 수 있을 것입니다."
+        paragraphs.append(p4)
+
+    return paragraphs
+
+
 @app.route('/report')
 @login_required
 def report():
@@ -588,6 +637,7 @@ def report():
 
     selected_year = request.args.get('year', years[0] if years else datetime.date.today().year, type=int)
 
+    # 선택된 연도 데이터
     report_data = conn.execute('''
         SELECT * FROM monthly_summary
         WHERE user_id = ? AND year = ? AND grand_total > 0
@@ -609,10 +659,84 @@ def report():
         'grand': year_total_row['grand']
     }
 
-    report_data_json = {
-        'labels': [f"{r['month']}월" for r in report_data],
-        'dpd': [r['dispensing_plus_daily_total'] for r in report_data],
-        'nim': [r['non_insurance_total'] for r in report_data]
+    # 전년도(작년) 데이터
+    last_year = selected_year - 1
+    last_year_data = conn.execute('''
+        SELECT * FROM monthly_summary
+        WHERE user_id = ? AND year = ?
+        ORDER BY month
+    ''', (user_id, last_year)).fetchall()
+
+    last_year_total_row = conn.execute('''
+        SELECT
+            COALESCE(SUM(dispensing_plus_daily_total), 0) as dpd,
+            COALESCE(SUM(non_insurance_total), 0) as nim,
+            COALESCE(SUM(grand_total), 0) as grand
+        FROM monthly_summary
+        WHERE user_id = ? AND year = ?
+    ''', (user_id, last_year)).fetchone()
+
+    last_year_total = {
+        'dpd': last_year_total_row['dpd'],
+        'nim': last_year_total_row['nim'],
+        'grand': last_year_total_row['grand']
+    } if last_year_total_row and last_year_total_row['grand'] > 0 else None
+
+    # 전년 대비 성장률
+    yoy_growth_pct = None
+    yoy_diff = 0
+    if last_year_total and last_year_total['grand'] > 0:
+        yoy_diff = year_total['grand'] - last_year_total['grand']
+        yoy_growth_pct = round((yoy_diff / last_year_total['grand']) * 100, 1)
+
+    # 최고/최저 실적 달
+    best_month = max(report_data, key=lambda r: r['grand_total']) if report_data else None
+    worst_month = min(report_data, key=lambda r: r['grand_total']) if report_data else None
+    months_count = len(report_data)
+    avg_monthly = (year_total['grand'] // months_count) if months_count > 0 else 0
+
+    # 비보험 및 조제 비중
+    nim_pct = round((year_total['nim'] / year_total['grand']) * 100, 1) if year_total['grand'] > 0 else 0
+    dpd_pct = round(100.0 - nim_pct, 1)
+
+    # 분기별 실적 집계 (Q1~Q4)
+    quarters = [
+        {'quarter': 1, 'name': '1분기 (1~3월)', 'months': [1, 2, 3], 'total': 0, 'dpd': 0, 'nim': 0},
+        {'quarter': 2, 'name': '2분기 (4~6월)', 'months': [4, 5, 6], 'total': 0, 'dpd': 0, 'nim': 0},
+        {'quarter': 3, 'name': '3분기 (7~9월)', 'months': [7, 8, 9], 'total': 0, 'dpd': 0, 'nim': 0},
+        {'quarter': 4, 'name': '4분기 (10~12월)', 'months': [10, 11, 12], 'total': 0, 'dpd': 0, 'nim': 0}
+    ]
+    for r in report_data:
+        m = r['month']
+        q_idx = (m - 1) // 3
+        quarters[q_idx]['total'] += r['grand_total']
+        quarters[q_idx]['dpd'] += r['dispensing_plus_daily_total']
+        quarters[q_idx]['nim'] += r['non_insurance_total']
+
+    # 연간 줄글 분석 생성
+    narrative_paragraphs = generate_annual_narrative_report(
+        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters
+    )
+
+    # 12개월 전체 배열 (작년 vs 올해 콤보 차트용)
+    cur_12m = [0] * 12
+    for r in report_data:
+        cur_12m[r['month'] - 1] = r['grand_total']
+
+    last_12m = [0] * 12
+    for r in last_year_data:
+        last_12m[r['month'] - 1] = r['grand_total']
+
+    chart_payload = {
+        'labels': [f'{m}월' for m in range(1, 13)],
+        'cur_year': cur_12m,
+        'cur_dpd': [r['dispensing_plus_daily_total'] for r in report_data],
+        'cur_nim': [r['non_insurance_total'] for r in report_data],
+        'last_year': last_12m,
+        'has_last_year': any(v > 0 for v in last_12m),
+        'quarters_labels': [q['name'] for q in quarters],
+        'quarters_totals': [q['total'] for q in quarters],
+        'composition': [year_total['dpd'], year_total['nim']]
     }
 
     conn.close()
@@ -622,7 +746,17 @@ def report():
                            selected_year=selected_year,
                            report_data=report_data,
                            year_total=year_total,
-                           report_data_json=report_data_json)
+                           last_year_total=last_year_total,
+                           yoy_growth_pct=yoy_growth_pct,
+                           yoy_diff=yoy_diff,
+                           best_month=best_month,
+                           worst_month=worst_month,
+                           avg_monthly=avg_monthly,
+                           nim_pct=nim_pct,
+                           dpd_pct=dpd_pct,
+                           quarters=quarters,
+                           narrative_paragraphs=narrative_paragraphs,
+                           chart_payload=chart_payload)
 
 
 @app.route('/export/<int:year>')
