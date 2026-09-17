@@ -43,6 +43,11 @@
                             <i class="fas fa-chart-bar"></i> 트렌드
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'calculator' %}active{% endif %}" href="/calculator">
+                            <i class="fas fa-calculator"></i> 순수익 계산기
+                        </a>
+                    </li>
                     {% if session.get('username') == 'admin' or session.get('original_admin_id') %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'admin_dashboard' %}active text-warning fw-bold{% else %}text-warning{% endif %}" href="/admin">

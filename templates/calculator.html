@@ -1,0 +1,627 @@
+{% extends 'base.html' %}
+{% block title %}순수익 계산기 - 약국 순익 관리{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="fas fa-calculator text-primary me-2"></i>약국 순수익 계산기</h2>
+        <p class="text-muted small mb-0">약국 경영 시뮬레이터 (개준모 순수익 계산기 공식 100% 탑재)</p>
+    </div>
+    <div class="d-flex gap-2 mt-2 mt-md-0">
+        {% if cur_stats.has_data %}
+        <button class="btn btn-outline-primary shadow-sm" id="btnLoadCurrentStats">
+            <i class="fas fa-cloud-download-alt me-1"></i> 이번 달 실적 불러오기
+        </button>
+        {% endif %}
+        <button class="btn btn-primary shadow-sm" id="btnSaveSettings">
+            <i class="fas fa-save me-1"></i> 설정값 저장하기
+        </button>
+    </div>
+</div>
+
+<!-- 안내 배너 -->
+<div class="alert alert-info border-0 shadow-sm d-flex align-items-center gap-3 mb-4">
+    <i class="fas fa-info-circle fs-3 text-info"></i>
+    <div class="small">
+        <strong>사용 안내:</strong> 연노란색 배경의 입력 필드를 채우시면 원천징수, 카드수수료, 금융비용, 조제소모품비 등이 <strong>실시간으로 자동 계산</strong>됩니다.
+        본 계산 결과는 <strong>세전 순수익</strong> 기준이며(부가세, 약국장 4대보험, 종소세 제외), 입력하신 값은 [설정값 저장하기]를 통해 언제든 안전하게 보관됩니다.
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- 좌측: 입력 양식 섹션 -->
+    <div class="col-lg-8">
+        
+        <!-- 1. 조제 수익 부문 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-dark"><i class="fas fa-prescription-bottle-alt text-primary me-2"></i>1. 조제 수익</span>
+                <span class="badge bg-primary-subtle text-primary fw-bold fs-6" id="badgeDispProfit">0원</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">조제료 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="dispensing_fee" value="{{ settings.dispensing_fee }}" min="0" step="10000">
+                        <div class="form-text text-muted small">공단부담금 및 본인부담금 포함 월 총 조제료</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">원천징수 (자동 계산)</label>
+                        <input type="text" class="form-control bg-light" id="tax_withheld" readonly value="0">
+                        <div class="form-text text-muted small">공식: 조제료 × 공단부담(70%) × 3.3%</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">조제료 삭감 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="dispensing_cut" value="{{ settings.dispensing_cut }}" min="0" step="10000">
+                        <div class="form-text text-muted small">심평원 월간 삭감 추정액</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">비급여 조제료 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="non_insurance_fee" value="{{ settings.non_insurance_fee }}" min="0" step="10000">
+                        <div class="form-text text-muted small">비급여 처방 조제료</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">비급여 약가마진 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="non_insurance_margin" value="{{ settings.non_insurance_margin }}" min="0" step="10000">
+                        <div class="form-text text-muted small">비급여 의약품 약가차액</div>
+                    </div>
+                </div>
+                <div class="p-3 bg-light rounded mt-3 d-flex justify-content-between align-items-center">
+                    <span class="small fw-bold text-muted">총 조제 수익 소계:</span>
+                    <span class="fw-bold fs-5 text-primary" id="subtotalDispensing">0원</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. 일반약 판매수익 부문 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-dark"><i class="fas fa-pills text-success me-2"></i>2. 일반약(매약) 판매수익</span>
+                <span class="badge bg-success-subtle text-success fw-bold fs-6" id="badgeOtcProfit">0원</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">하루 평균 일반약 매출 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="daily_otc_sales" value="{{ settings.daily_otc_sales }}" min="0" step="10000">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">월평균 근무일 (일)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="work_days" value="{{ settings.work_days }}" min="1" max="31">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">일반약 마진율 (%)</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control calc-input bg-warning-subtle" id="otc_margin_rate" value="{{ (settings.otc_margin_rate * 100)|round(1) }}" min="0" max="100" step="1">
+                            <span class="input-group-text">%</span>
+                        </div>
+                        <div class="form-text text-muted small">난매 35% ~ 마진형 50%</div>
+                    </div>
+                </div>
+                <div class="p-3 bg-light rounded mt-3 d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="small fw-bold text-muted">월간 일반약 총매출: </span>
+                        <span class="small fw-bold text-dark" id="monthlyOtcSalesText">0원</span>
+                    </div>
+                    <div>
+                        <span class="small fw-bold text-muted">총 일반약 수익 소계: </span>
+                        <span class="fw-bold fs-5 text-success" id="subtotalOtc">0원</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 기타 수익 부문 (금융비용, 카드포인트) -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-dark"><i class="fas fa-credit-card text-info me-2"></i>3. 기타 수익 (금융비용 & 카드포인트)</span>
+                <span class="badge bg-info-subtle text-info fw-bold fs-6" id="badgeOtherProfit">0원</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">1달 평균 약제비 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="monthly_drug_cost" value="{{ settings.monthly_drug_cost }}" min="0" step="100000">
+                        <div class="form-text text-muted small">월간 전문의약품 결제대금</div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small fw-bold">전문약 금융비용 (1.8%)</label>
+                        <input type="text" class="form-control bg-light" id="finance_profit" readonly value="0">
+                        <div class="form-text text-muted small">약제비 × 1.8%</div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small fw-bold">카드 포인트 (2.0%)</label>
+                        <input type="text" class="form-control bg-light" id="card_point" readonly value="0">
+                        <div class="form-text text-muted small">약제비 × 2.0%</div>
+                    </div>
+                </div>
+                <div class="p-3 bg-light rounded mt-3 d-flex justify-content-between align-items-center">
+                    <span class="small fw-bold text-muted">총 기타 수익 소계:</span>
+                    <span class="fw-bold fs-5 text-info" id="subtotalOther">0원</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. 인건비 지출 부문 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-dark"><i class="fas fa-users text-danger me-2"></i>4. 인건비 지출</span>
+                <span class="badge bg-danger-subtle text-danger fw-bold fs-6" id="badgeLaborExpense">0원</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">근무약사 급여 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="pharmacist_salary" value="{{ settings.pharmacist_salary }}" min="0" step="100000">
+                        <div class="form-text text-muted small">실지급액, 4대보험, 퇴직금 포함</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">직원 급여 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="staff_salary" value="{{ settings.staff_salary }}" min="0" step="100000">
+                        <div class="form-text text-muted small">실지급액, 4대보험, 퇴직금 포함</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">식비 및 복리후생 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="meal_cost" value="{{ settings.meal_cost }}" min="0" step="10000">
+                    </div>
+                </div>
+                <div class="p-3 bg-light rounded mt-3 d-flex justify-content-between align-items-center">
+                    <span class="small fw-bold text-muted">인건비 합계:</span>
+                    <span class="fw-bold fs-5 text-danger" id="subtotalLabor">0원</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. 임대료 및 관리비 부문 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-dark"><i class="fas fa-building text-secondary me-2"></i>5. 월세 및 관리비</span>
+                <span class="badge bg-secondary-subtle text-secondary fw-bold fs-6" id="badgeRentExpense">0원</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">월세 (부가세 포함) (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="rent_cost" value="{{ settings.rent_cost }}" min="0" step="100000">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">관리비 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="maintenance_cost" value="{{ settings.maintenance_cost }}" min="0" step="10000">
+                    </div>
+                </div>
+                <div class="p-3 bg-light rounded mt-3 d-flex justify-content-between align-items-center">
+                    <span class="small fw-bold text-muted">임대·관리비 합계:</span>
+                    <span class="fw-bold fs-5 text-dark" id="subtotalRent">0원</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. 조제 소모품 및 시스템 비용 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-dark"><i class="fas fa-boxes text-warning me-2"></i>6. 조제 관련 소모비용</span>
+                <span class="badge bg-warning-subtle text-dark fw-bold fs-6" id="badgeSuppliesExpense">0원</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">소모품비 (롤지, 봉투, 잉크 등)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="supplies_cost" value="{{ settings.supplies_cost }}" min="0" step="10000">
+                        <div class="form-text text-muted small">0 입력 시 조제료의 1.5% 자동적용</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">조제프로그램 비용 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="software_cost" value="{{ settings.software_cost }}" min="0" step="10000">
+                        <div class="form-text text-muted small">유팜, 온팜, PM+20 등</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">바코드 사용료 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="barcode_cost" value="{{ settings.barcode_cost }}" min="0" step="10000">
+                        <div class="form-text text-muted small">0 입력 시 조제료의 0.5% 자동적용</div>
+                    </div>
+                </div>
+                <div class="p-3 bg-light rounded mt-3 d-flex justify-content-between align-items-center">
+                    <span class="small fw-bold text-muted">조제 소모비용 합계:</span>
+                    <span class="fw-bold fs-5 text-dark" id="subtotalSupplies">0원</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 7. 그 외 일반 운영비용 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                <span class="fw-bold text-dark"><i class="fas fa-receipt text-secondary me-2"></i>7. 그 외 운영비용 & 카드수수료</span>
+                <span class="badge bg-secondary-subtle text-secondary fw-bold fs-6" id="badgeOperatingExpense">0원</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">전기세 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="electricity_cost" value="{{ settings.electricity_cost }}" min="0" step="10000">
+                        <div class="form-text text-muted small">평당 1만원 기준 등</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">인터넷 / 전화비용 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="communication_cost" value="{{ settings.communication_cost }}" min="0" step="5000">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">정수기 렌탈료 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="water_purifier_cost" value="{{ settings.water_purifier_cost }}" min="0" step="5000">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">보안비용 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="security_cost" value="{{ settings.security_cost }}" min="0" step="5000">
+                        <div class="form-text text-muted small">세콤, 캡스 등</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">세무사 기장/조정료 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="tax_accountant_cost" value="{{ settings.tax_accountant_cost }}" min="0" step="10000">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-bold">신상신고/약사회비 (원)</label>
+                        <input type="number" class="form-control calc-input bg-warning-subtle" id="association_fee" value="{{ settings.association_fee }}" min="0" step="10000">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">카드 수수료율 (%)</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control calc-input bg-warning-subtle" id="card_fee_rate" value="{{ (settings.card_fee_rate * 100)|round(1) }}" min="0" max="10" step="0.1">
+                            <span class="input-group-text">%</span>
+                        </div>
+                        <div class="form-text text-muted small">기본 2.0% (비급여/매약 매출 규모에 따라 상이)</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">월 추정 카드수수료 (자동 계산)</label>
+                        <input type="text" class="form-control bg-light" id="card_fee" readonly value="0">
+                        <div class="form-text text-muted small">공식: (본인부담금+비급여+일반약매출) × 90%결제율 × 수수료율</div>
+                    </div>
+                </div>
+                <div class="p-3 bg-light rounded mt-3 d-flex justify-content-between align-items-center">
+                    <span class="small fw-bold text-muted">운영비용 합계:</span>
+                    <span class="fw-bold fs-5 text-dark" id="subtotalOperating">0원</span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 우측: 실시간 고정 종합 요약 카드 (Sticky) -->
+    <div class="col-lg-4">
+        <div class="sticky-top" style="top: 20px; z-index: 10;">
+            
+            <!-- 최종 순수익 카드 -->
+            <div class="card border-0 shadow-lg text-white mb-4" style="background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); border-radius: 16px;">
+                <div class="card-body p-4 text-center">
+                    <div class="badge bg-white text-primary px-3 py-1 mb-2 fw-bold">
+                        <i class="fas fa-award me-1"></i> 월 예상 세전 순수익
+                    </div>
+                    <h2 class="display-6 fw-bold mb-1" id="dispNetProfit">0원</h2>
+                    <p class="text-light opacity-75 small mb-3" id="dispNetProfitMan">약 0만 원</p>
+                    
+                    <div class="p-3 rounded-3" style="background: rgba(255, 255, 255, 0.15);">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small opacity-75">수익 마진율</span>
+                            <span class="fw-bold fs-6" id="dispProfitMargin">0.0%</span>
+                        </div>
+                        <div class="progress" style="height: 6px;">
+                            <div class="progress-bar bg-warning" role="progressbar" id="progressBarMargin" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 수익 vs 지출 대조 카드 -->
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white py-3 fw-bold">
+                    <i class="fas fa-chart-pie text-primary me-2"></i>수익 및 지출 구조 요약
+                </div>
+                <div class="card-body">
+                    <!-- 총수익 -->
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="fw-bold text-success"><i class="fas fa-plus-circle me-1"></i> 총 수익 (A)</span>
+                        <span class="fw-bold text-success fs-5" id="dispTotalRevenue">0원</span>
+                    </div>
+                    <div class="small text-muted ps-3 mb-3 border-start border-success border-2">
+                        <div class="d-flex justify-content-between py-1">
+                            <span>• 조제 순익</span>
+                            <span id="summaryDisp">0원</span>
+                        </div>
+                        <div class="d-flex justify-content-between py-1">
+                            <span>• 일반약 순익</span>
+                            <span id="summaryOtc">0원</span>
+                        </div>
+                        <div class="d-flex justify-content-between py-1">
+                            <span>• 금융/카드 기타</span>
+                            <span id="summaryOther">0원</span>
+                        </div>
+                    </div>
+
+                    <hr class="my-2">
+
+                    <!-- 총지출 -->
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="fw-bold text-danger"><i class="fas fa-minus-circle me-1"></i> 총 지출 (B)</span>
+                        <span class="fw-bold text-danger fs-5" id="dispTotalExpense">0원</span>
+                    </div>
+                    <div class="small text-muted ps-3 mb-3 border-start border-danger border-2">
+                        <div class="d-flex justify-content-between py-1">
+                            <span>• 인건비</span>
+                            <span id="summaryLabor">0원</span>
+                        </div>
+                        <div class="d-flex justify-content-between py-1">
+                            <span>• 월세 및 관리비</span>
+                            <span id="summaryRent">0원</span>
+                        </div>
+                        <div class="d-flex justify-content-between py-1">
+                            <span>• 조제 소모품/프로그램</span>
+                            <span id="summarySupplies">0원</span>
+                        </div>
+                        <div class="d-flex justify-content-between py-1">
+                            <span>• 운영비 및 카드수수료</span>
+                            <span id="summaryOperating">0원</span>
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2 pt-2">
+                        <button class="btn btn-primary fw-bold py-2 shadow-sm" id="btnSaveSettingsSide">
+                            <i class="fas fa-check-circle me-1"></i> 현재 설정값 영구 저장
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 추가 팁 카드 -->
+            <div class="card border-0 shadow-sm bg-light">
+                <div class="card-body p-3 small text-muted">
+                    <i class="fas fa-lightbulb text-warning me-1"></i>
+                    <strong>팁:</strong> 숫자를 수정하시면 즉시 순익이 재계산됩니다. 세전 순수익 확인 후 [현재 설정값 영구 저장]을 누르시면 다음에 접속하셔도 설정이 그대로 유지됩니다.
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 실시간 연산 로직
+function getNum(id) {
+    const el = document.getElementById(id);
+    if (!el) return 0;
+    const val = parseFloat(el.value);
+    return isNaN(val) ? 0 : val;
+}
+
+function setNum(id, val) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.value = Math.round(val);
+    }
+}
+
+function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.textContent = text;
+    }
+}
+
+function fmt(n) {
+    return Math.round(n).toLocaleString() + '원';
+}
+
+function calculateProfit() {
+    // 1. 조제 수익
+    const dispensingFee = getNum('dispensing_fee');
+    const taxWithheld = dispensingFee * 0.7 * 0.033; // 조제료 X 70% X 3.3%
+    const taxWithheldInput = document.getElementById('tax_withheld');
+    if (taxWithheldInput) taxWithheldInput.value = fmt(taxWithheld);
+    
+    const dispensingCut = getNum('dispensing_cut');
+    const nonInsuranceFee = getNum('non_insurance_fee');
+    const nonInsuranceMargin = getNum('non_insurance_margin');
+    
+    const totalDispensingProfit = dispensingFee - taxWithheld - dispensingCut + nonInsuranceFee + nonInsuranceMargin;
+    setText('subtotalDispensing', fmt(totalDispensingProfit));
+    setText('badgeDispProfit', fmt(totalDispensingProfit));
+    setText('summaryDisp', fmt(totalDispensingProfit));
+
+    // 2. 일반약 판매수익
+    const dailyOtc = getNum('daily_otc_sales');
+    const workDays = getNum('work_days');
+    const otcRate = getNum('otc_margin_rate') / 100.0;
+    const monthlyOtcSales = dailyOtc * workDays;
+    const totalOtcProfit = monthlyOtcSales * otcRate;
+    
+    setText('monthlyOtcSalesText', fmt(monthlyOtcSales));
+    setText('subtotalOtc', fmt(totalOtcProfit));
+    setText('badgeOtcProfit', fmt(totalOtcProfit));
+    setText('summaryOtc', fmt(totalOtcProfit));
+
+    // 3. 기타 수익
+    const monthlyDrugCost = getNum('monthly_drug_cost');
+    const financeProfit = monthlyDrugCost * 0.018; // 1.8%
+    const cardPoint = monthlyDrugCost * 0.02;     // 2.0%
+    const totalOtherProfit = financeProfit + cardPoint;
+    
+    const finInput = document.getElementById('finance_profit');
+    if (finInput) finInput.value = fmt(financeProfit);
+    const cpInput = document.getElementById('card_point');
+    if (cpInput) cpInput.value = fmt(cardPoint);
+
+    setText('subtotalOther', fmt(totalOtherProfit));
+    setText('badgeOtherProfit', fmt(totalOtherProfit));
+    setText('summaryOther', fmt(totalOtherProfit));
+
+    // 🌟 총수익 (A)
+    const totalRevenue = totalDispensingProfit + totalOtcProfit + totalOtherProfit;
+    setText('dispTotalRevenue', fmt(totalRevenue));
+
+    // 4. 인건비
+    const pharmSalary = getNum('pharmacist_salary');
+    const staffSalary = getNum('staff_salary');
+    const mealCost = getNum('meal_cost');
+    const totalLabor = pharmSalary + staffSalary + mealCost;
+    
+    setText('subtotalLabor', fmt(totalLabor));
+    setText('badgeLaborExpense', fmt(totalLabor));
+    setText('summaryLabor', fmt(totalLabor));
+
+    // 5. 임대료 및 관리비
+    const rentCost = getNum('rent_cost');
+    const maintCost = getNum('maintenance_cost');
+    const totalRent = rentCost + maintCost;
+    
+    setText('subtotalRent', fmt(totalRent));
+    setText('badgeRentExpense', fmt(totalRent));
+    setText('summaryRent', fmt(totalRent));
+
+    // 6. 조제 소모비용
+    let suppliesCost = getNum('supplies_cost');
+    if (suppliesCost === 0 && dispensingFee > 0) {
+        suppliesCost = dispensingFee * 0.015;
+    }
+    const softwareCost = getNum('software_cost');
+    let barcodeCost = getNum('barcode_cost');
+    if (barcodeCost === 0 && dispensingFee > 0) {
+        barcodeCost = dispensingFee * 0.005;
+    }
+    const totalSupplies = suppliesCost + softwareCost + barcodeCost;
+    
+    setText('subtotalSupplies', fmt(totalSupplies));
+    setText('badgeSuppliesExpense', fmt(totalSupplies));
+    setText('summarySupplies', fmt(totalSupplies));
+
+    // 7. 그 외 운영비용 & 카드수수료
+    const elecCost = getNum('electricity_cost');
+    const commCost = getNum('communication_cost');
+    const waterCost = getNum('water_purifier_cost');
+    const secCost = getNum('security_cost');
+    const taxCost = getNum('tax_accountant_cost');
+    const assocCost = getNum('association_fee');
+    const cardFeeRate = getNum('card_fee_rate') / 100.0;
+
+    const totalCardPaymentBase = ((dispensingFee + monthlyDrugCost) * 0.3 + nonInsuranceFee + nonInsuranceMargin + monthlyOtcSales) * 0.9;
+    const cardFee = totalCardPaymentBase * cardFeeRate;
+    const cardFeeInput = document.getElementById('card_fee');
+    if (cardFeeInput) cardFeeInput.value = fmt(cardFee);
+
+    const totalOperating = elecCost + commCost + waterCost + secCost + taxCost + assocCost + cardFee;
+    setText('subtotalOperating', fmt(totalOperating));
+    setText('badgeOperatingExpense', fmt(totalOperating));
+    setText('summaryOperating', fmt(totalOperating));
+
+    // 📉 총지출 (B)
+    const totalExpense = totalLabor + totalRent + totalSupplies + totalOperating;
+    setText('dispTotalExpense', fmt(totalExpense));
+
+    // 🏆 최종 세전 순수익
+    const netProfit = totalRevenue - totalExpense;
+    setText('dispNetProfit', fmt(netProfit));
+    
+    const manWon = Math.round(netProfit / 10000);
+    setText('dispNetProfitMan', `약 ${manWon.toLocaleString()}만 원`);
+
+    // 마진율
+    const margin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0;
+    setText('dispProfitMargin', margin + '%');
+    
+    const barEl = document.getElementById('progressBarMargin');
+    if (barEl) {
+        const clampMargin = Math.max(0, Math.min(100, parseFloat(margin)));
+        barEl.style.width = clampMargin + '%';
+        if (margin >= 30) {
+            barEl.className = 'progress-bar bg-success';
+        } else if (margin >= 15) {
+            barEl.className = 'progress-bar bg-warning';
+        } else {
+            barEl.className = 'progress-bar bg-danger';
+        }
+    }
+}
+
+// 이벤트 리스너 바인딩
+document.querySelectorAll('.calc-input').forEach(input => {
+    input.addEventListener('input', calculateProfit);
+    input.addEventListener('change', calculateProfit);
+});
+
+// 초기 연산 실행
+calculateProfit();
+
+// 이번 달 실적 불러오기 버튼
+const btnLoad = document.getElementById('btnLoadCurrentStats');
+if (btnLoad) {
+    btnLoad.addEventListener('click', function() {
+        if (!confirm('이번 달 현재까지의 실제 누적 데이터를 계산기 조제료 및 비보험 항목에 적용하시겠습니까?')) return;
+        
+        const curDisp = {{ cur_stats.disp|default(0) }};
+        const curDaily = {{ cur_stats.daily|default(0) }};
+        const curNim = {{ cur_stats.nim|default(0) }};
+        const curDays = {{ cur_stats.days|default(1) }};
+
+        if (curDisp > 0) setNum('dispensing_fee', curDisp);
+        if (curNim > 0) setNum('non_insurance_margin', curNim);
+        if (curDaily > 0 && curDays > 0) {
+            const estDailySales = Math.round((curDaily / curDays) / 0.35);
+            setNum('daily_otc_sales', estDailySales);
+            setNum('work_days', curDays);
+        }
+        calculateProfit();
+        alert('이번 달 실적이 계산기에 성공적으로 반영되었습니다!');
+    });
+}
+
+// 설정값 영구 저장 로직
+function saveSettingsToServer() {
+    const payload = {
+        dispensing_fee: getNum('dispensing_fee'),
+        dispensing_cut: getNum('dispensing_cut'),
+        non_insurance_fee: getNum('non_insurance_fee'),
+        non_insurance_margin: getNum('non_insurance_margin'),
+        daily_otc_sales: getNum('daily_otc_sales'),
+        work_days: Math.round(getNum('work_days')),
+        otc_margin_rate: getNum('otc_margin_rate') / 100.0,
+        monthly_drug_cost: getNum('monthly_drug_cost'),
+        pharmacist_salary: getNum('pharmacist_salary'),
+        staff_salary: getNum('staff_salary'),
+        meal_cost: getNum('meal_cost'),
+        rent_cost: getNum('rent_cost'),
+        maintenance_cost: getNum('maintenance_cost'),
+        supplies_cost: getNum('supplies_cost'),
+        software_cost: getNum('software_cost'),
+        barcode_cost: getNum('barcode_cost'),
+        electricity_cost: getNum('electricity_cost'),
+        communication_cost: getNum('communication_cost'),
+        water_purifier_cost: getNum('water_purifier_cost'),
+        security_cost: getNum('security_cost'),
+        tax_accountant_cost: getNum('tax_accountant_cost'),
+        association_fee: getNum('association_fee'),
+        card_fee_rate: getNum('card_fee_rate') / 100.0
+    };
+
+    fetch('/api/calculator/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            alert('🎉 ' + res.message);
+        } else {
+            alert('저장 실패: ' + (res.error || '알 수 없는 오류'));
+        }
+    })
+    .catch(err => {
+        alert('서버 저장 중 오류가 발생했습니다: ' + err);
+    });
+}
+
+const btnSave = document.getElementById('btnSaveSettings');
+if (btnSave) btnSave.addEventListener('click', saveSettingsToServer);
+
+const btnSaveSide = document.getElementById('btnSaveSettingsSide');
+if (btnSaveSide) btnSaveSide.addEventListener('click', saveSettingsToServer);
+</script>
+{% endblock %}

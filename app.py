@@ -749,6 +749,104 @@ def trend():
                            heatmap_data=heatmap_data)
 
 
+# ==========================================
+# 🧮 약국 순수익 계산기 라우트
+# ==========================================
+
+@app.route('/calculator', methods=['GET'])
+@login_required
+def calculator():
+    user_id = session['user_id']
+    conn = get_db()
+
+    # 기존 저장된 계산기 설정값 조회
+    row = conn.execute('SELECT * FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
+
+    defaults = {
+        'dispensing_fee': 15000000,
+        'dispensing_cut': 0,
+        'non_insurance_fee': 500000,
+        'non_insurance_margin': 1500000,
+        'daily_otc_sales': 1000000,
+        'work_days': 25,
+        'otc_margin_rate': 0.35,
+        'monthly_drug_cost': 45000000,
+        'pharmacist_salary': 4000000,
+        'staff_salary': 2500000,
+        'meal_cost': 300000,
+        'rent_cost': 3300000,
+        'maintenance_cost': 300000,
+        'supplies_cost': 0,
+        'software_cost': 110000,
+        'barcode_cost': 0,
+        'electricity_cost': 250000,
+        'communication_cost': 50000,
+        'water_purifier_cost': 30000,
+        'security_cost': 70000,
+        'tax_accountant_cost': 150000,
+        'association_fee': 50000,
+        'card_fee_rate': 0.02
+    }
+
+    settings = dict(row) if row else defaults
+
+    # 현재 월 실적 조회 (원클릭 자동 불러오기용)
+    today = datetime.date.today()
+    cur_month_prefix = f"{today.year}-{today.month:02d}"
+    stats_row = conn.execute('''
+        SELECT 
+            COALESCE(SUM(dispensing_fee), 0) as disp,
+            COALESCE(SUM(daily_net_profit), 0) as daily,
+            COALESCE(SUM(non_insurance_margin), 0) as nim,
+            COUNT(*) as days
+        FROM daily_profit
+        WHERE user_id = ? AND date LIKE ?
+    ''', (user_id, cur_month_prefix + '%')).fetchone()
+
+    cur_stats = {
+        'has_data': stats_row and (stats_row['disp'] > 0 or stats_row['daily'] > 0),
+        'disp': stats_row['disp'] if stats_row else 0,
+        'daily': stats_row['daily'] if stats_row else 0,
+        'nim': stats_row['nim'] if stats_row else 0,
+        'days': stats_row['days'] if stats_row else 0
+    }
+
+    conn.close()
+    return render_template('calculator.html', settings=settings, cur_stats=cur_stats)
+
+
+@app.route('/api/calculator/save', methods=['POST'])
+@login_required
+def save_calculator_settings():
+    user_id = session['user_id']
+    data = request.get_json() or {}
+    conn = get_db()
+
+    fields = [
+        'dispensing_fee', 'dispensing_cut', 'non_insurance_fee', 'non_insurance_margin',
+        'daily_otc_sales', 'work_days', 'otc_margin_rate', 'monthly_drug_cost',
+        'pharmacist_salary', 'staff_salary', 'meal_cost', 'rent_cost', 'maintenance_cost',
+        'supplies_cost', 'software_cost', 'barcode_cost', 'electricity_cost',
+        'communication_cost', 'water_purifier_cost', 'security_cost', 'tax_accountant_cost',
+        'association_fee', 'card_fee_rate'
+    ]
+
+    existing = conn.execute('SELECT id FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
+    if existing:
+        set_clause = ', '.join([f"{f} = ?" for f in fields])
+        params = [data.get(f, 0) for f in fields] + [user_id]
+        conn.execute(f"UPDATE user_calculator_settings SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", params)
+    else:
+        col_clause = 'user_id, ' + ', '.join(fields)
+        val_clause = '?, ' + ', '.join(['?' for _ in fields])
+        params = [user_id] + [data.get(f, 0) for f in fields]
+        conn.execute(f"INSERT INTO user_calculator_settings ({col_clause}) VALUES ({val_clause})", params)
+
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': '계산기 설정값이 안전하게 저장되었습니다.'})
+
+
 @app.route('/download_template')
 @login_required
 def download_template():

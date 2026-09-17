@@ -262,6 +262,38 @@ def init_sqlite_db():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_calculator_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            dispensing_fee INTEGER DEFAULT 0,
+            dispensing_cut INTEGER DEFAULT 0,
+            non_insurance_fee INTEGER DEFAULT 0,
+            non_insurance_margin INTEGER DEFAULT 0,
+            daily_otc_sales INTEGER DEFAULT 0,
+            work_days INTEGER DEFAULT 25,
+            otc_margin_rate REAL DEFAULT 0.35,
+            monthly_drug_cost INTEGER DEFAULT 0,
+            pharmacist_salary INTEGER DEFAULT 0,
+            staff_salary INTEGER DEFAULT 0,
+            meal_cost INTEGER DEFAULT 0,
+            rent_cost INTEGER DEFAULT 0,
+            maintenance_cost INTEGER DEFAULT 0,
+            supplies_cost INTEGER DEFAULT 0,
+            software_cost INTEGER DEFAULT 0,
+            barcode_cost INTEGER DEFAULT 0,
+            electricity_cost INTEGER DEFAULT 0,
+            communication_cost INTEGER DEFAULT 0,
+            water_purifier_cost INTEGER DEFAULT 0,
+            security_cost INTEGER DEFAULT 0,
+            tax_accountant_cost INTEGER DEFAULT 0,
+            association_fee INTEGER DEFAULT 0,
+            card_fee_rate REAL DEFAULT 0.02,
+            updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date ON daily_profit(user_id, date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_ym ON monthly_summary(user_id, year, month)')
 
@@ -317,6 +349,38 @@ def init_postgres_db(db_url):
             grand_total BIGINT DEFAULT 0,
             prev_month_diff BIGINT DEFAULT 0,
             UNIQUE(user_id, year, month)
+        )
+    ''')
+
+    # 4. user_calculator_settings 테이블
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS user_calculator_settings (
+            id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            dispensing_fee BIGINT DEFAULT 0,
+            dispensing_cut BIGINT DEFAULT 0,
+            non_insurance_fee BIGINT DEFAULT 0,
+            non_insurance_margin BIGINT DEFAULT 0,
+            daily_otc_sales BIGINT DEFAULT 0,
+            work_days INT DEFAULT 25,
+            otc_margin_rate NUMERIC(5,4) DEFAULT 0.35,
+            monthly_drug_cost BIGINT DEFAULT 0,
+            pharmacist_salary BIGINT DEFAULT 0,
+            staff_salary BIGINT DEFAULT 0,
+            meal_cost BIGINT DEFAULT 0,
+            rent_cost BIGINT DEFAULT 0,
+            maintenance_cost BIGINT DEFAULT 0,
+            supplies_cost BIGINT DEFAULT 0,
+            software_cost BIGINT DEFAULT 0,
+            barcode_cost BIGINT DEFAULT 0,
+            electricity_cost BIGINT DEFAULT 0,
+            communication_cost BIGINT DEFAULT 0,
+            water_purifier_cost BIGINT DEFAULT 0,
+            security_cost BIGINT DEFAULT 0,
+            tax_accountant_cost BIGINT DEFAULT 0,
+            association_fee BIGINT DEFAULT 0,
+            card_fee_rate NUMERIC(5,4) DEFAULT 0.02,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
 
