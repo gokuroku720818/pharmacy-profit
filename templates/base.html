@@ -43,6 +43,13 @@
                             <i class="fas fa-chart-bar"></i> 트렌드
                         </a>
                     </li>
+                    {% if session.get('username') == 'admin' or session.get('original_admin_id') %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'admin_dashboard' %}active text-warning fw-bold{% else %}text-warning{% endif %}" href="/admin">
+                            <i class="fas fa-shield-alt"></i> 관리자 콘솔
+                        </a>
+                    </li>
+                    {% endif %}
                     <li class="nav-item ms-lg-3 d-flex align-items-center">
                         <button class="btn btn-sm btn-light text-primary fw-bold" data-bs-toggle="modal" data-bs-target="#excelUploadModal">
                             <i class="fas fa-file-excel me-1"></i> 엑셀 가져오기
@@ -130,6 +137,18 @@
     </div>
 
     <div class="container mt-4">
+        {% if session.get('original_admin_id') %}
+        <div class="alert alert-warning border border-warning shadow-sm d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <i class="fas fa-user-secret fa-lg me-2 text-dark"></i>
+                <strong>관리자 열람 모드:</strong> 현재 <strong>[{{ session.pharmacy_name }}]</strong> 약국의 데이터 화면을 조회 중입니다.
+            </div>
+            <a href="/admin/switch_back" class="btn btn-sm btn-dark fw-bold">
+                <i class="fas fa-arrow-left me-1"></i> 관리자 콘솔로 복귀
+            </a>
+        </div>
+        {% endif %}
+
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
         {% for category, message in messages %}

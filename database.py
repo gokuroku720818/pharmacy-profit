@@ -127,7 +127,34 @@ def recalc_monthly_summary(conn, user_id, year, month):
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (user_id, year, month, row['dpd'], row['nim'], row['gt'], diff))
 
+def get_all_users_stats():
+    """모든 가입 회원 목록 및 각 약국의 통계 반환 (관리자 전용)"""
+    conn = get_db()
+    users = conn.execute('''
+        SELECT 
+            u.id, u.username, u.pharmacy_name, u.created_at,
+            COUNT(d.id) as total_entries,
+            MIN(d.date) as min_date,
+            MAX(d.date) as max_date,
+            COALESCE(SUM(d.total), 0) as total_profit
+        FROM users u
+        LEFT JOIN daily_profit d ON u.id = d.user_id
+        GROUP BY u.id
+        ORDER BY u.id ASC
+    ''').fetchall()
+    conn.close()
+    return users
+
+
+def delete_user_and_data(user_id):
+    """특정 회원의 모든 데이터와 계정 삭제 (관리자 전용)"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM daily_profit WHERE user_id = ?', (user_id,))
+    cursor.execute('DELETE FROM monthly_summary WHERE user_id = ?', (user_id,))
+    cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
     conn.commit()
+    conn.close()
 
 
 if __name__ == '__main__':

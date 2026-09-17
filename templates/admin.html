@@ -1,0 +1,144 @@
+{% extends 'base.html' %}
+{% block title %}관리자 콘솔 - 약국 순익 관리 시스템{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="mb-1"><i class="fas fa-shield-alt text-primary"></i> 관리자 콘솔</h2>
+        <p class="text-muted mb-0">가입된 약국 회원 목록 및 시스템 현황을 모니터링합니다.</p>
+    </div>
+    <div>
+        <a href="/" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left"></i> 내 대시보드로 가기
+        </a>
+    </div>
+</div>
+
+<!-- 통계 요약 카드 -->
+<div class="row mb-4">
+    <div class="col-md-4 mb-3">
+        <div class="card shadow-sm border-0 bg-primary text-white">
+            <div class="card-body p-3">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="text-white-50 small">총 가입 약국</div>
+                        <h3 class="mb-0 fw-bold">{{ total_users }} 곳</h3>
+                    </div>
+                    <i class="fas fa-clinic-medical fa-2x opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="card shadow-sm border-0 bg-success text-white">
+            <div class="card-body p-3">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="text-white-50 small">총 등록된 일별 기록</div>
+                        <h3 class="mb-0 fw-bold">{{ "{:,}".format(total_records) }} 일치</h3>
+                    </div>
+                    <i class="fas fa-calendar-check fa-2x opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="card shadow-sm border-0 bg-info text-white">
+            <div class="card-body p-3">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="text-white-50 small">누적 관리 순익 규모</div>
+                        <h3 class="mb-0 fw-bold">{{ "{:,}".format(total_profit) }} 원</h3>
+                    </div>
+                    <i class="fas fa-coins fa-2x opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 회원 목록 테이블 -->
+<div class="card shadow-sm border-0">
+    <div class="card-header bg-white py-3">
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="mb-0 fw-bold"><i class="fas fa-users text-primary me-2"></i>약국 회원 목록</h5>
+            <span class="badge bg-secondary">총 {{ users|length }}명</span>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="text-center" style="width: 60px;">No</th>
+                        <th>약국명</th>
+                        <th>아이디</th>
+                        <th>가입일</th>
+                        <th class="text-center">기록 건수</th>
+                        <th>데이터 기간</th>
+                        <th class="text-end">총 누적 순익</th>
+                        <th class="text-center" style="width: 220px;">관리 액션</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td class="text-center text-muted">{{ u.id }}</td>
+                        <td>
+                            <strong>{{ u.pharmacy_name }}</strong>
+                            {% if u.username == 'admin' %}
+                            <span class="badge bg-danger ms-1">최고관리자</span>
+                            {% endif %}
+                        </td>
+                        <td><code>{{ u.username }}</code></td>
+                        <td class="text-muted small">{{ u.created_at[:10] if u.created_at else '-' }}</td>
+                        <td class="text-center">
+                            <span class="badge {% if u.total_entries > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
+                                {{ u.total_entries }}일
+                            </span>
+                        </td>
+                        <td class="text-muted small">
+                            {% if u.min_date and u.max_date %}
+                            {{ u.min_date }} ~ {{ u.max_date }}
+                            {% else %}
+                            <span class="text-secondary">기록 없음</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end fw-bold text-success">
+                            {{ "{:,}".format(u.total_profit) }}원
+                        </td>
+                        <td class="text-center">
+                            <div class="btn-group btn-group-sm">
+                                <a href="/admin/switch_user/{{ u.id }}" class="btn btn-outline-primary" title="이 약국의 화면으로 둘러보기">
+                                    <i class="fas fa-eye"></i> 대시보드 열람
+                                </a>
+                                {% if u.username != 'admin' and u.id != 1 %}
+                                <form method="POST" action="/admin/delete_user/{{ u.id }}" class="d-inline" onsubmit="return confirm('정말 [{{ u.pharmacy_name }}] 계정과 모든 데이터를 영구 삭제하시겠습니까?');">
+                                    <button type="submit" class="btn btn-outline-danger ms-1" title="계정 및 데이터 삭제">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="alert alert-light border mt-4">
+    <div class="d-flex">
+        <i class="fas fa-info-circle text-primary fa-lg me-3 mt-1"></i>
+        <div class="small text-muted">
+            <strong>관리자 안내:</strong>
+            <ul class="mb-0 ps-3 mt-1">
+                <li><strong>대시보드 열람</strong>을 클릭하면 해당 회원의 시점으로 화면이 전환되어 대시보드, 캘린더, 리포트를 점검할 수 있습니다.</li>
+                <li>열람 중 언제든지 상단 주황색 배너의 <strong>[관리자로 복귀]</strong> 버튼을 누르면 원래 관리자 모드로 돌아옵니다.</li>
+                <li>회원의 비밀번호는 단방향 암호화(Hash)되어 있어 관리자도 알 수 없으며 안전하게 보호됩니다.</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

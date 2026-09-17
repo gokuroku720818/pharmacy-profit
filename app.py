@@ -3,7 +3,7 @@
 """
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, session
 from werkzeug.security import generate_password_hash, check_password_hash
-from database import get_db, init_db, recalc_monthly_summary
+from database import get_db, init_db, recalc_monthly_summary, get_all_users_stats, delete_user_and_data
 from functools import wraps
 import datetime
 import calendar
@@ -28,6 +28,21 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
             return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def admin_required(f):
+    """관리자(admin) 전용 데코레이터"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        # 원래 관리자이거나 현재 admin인 경우 허용
+        is_admin = (session.get('username') == 'admin') or ('original_admin_id' in session)
+        if not is_admin:
+            flash('관리자만 접근할 수 있는 페이지입니다.', 'danger')
+            return redirect(url_for('dashboard'))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -858,7 +873,95 @@ def upload_excel():
     except Exception as e:
         flash(f'엑셀 가져오기 실패: {str(e)}', 'danger')
 
+# ==========================================
+# 🛡️ 관리자 전용 콘솔 라우트
+# ==========================================
+
+@app.route('/admin')
+@admin_required
+def admin_dashboard():
+    # 원래 관리자로 스위칭 복귀가 필요한 상태인지 확인
+    users = get_all_users_stats()
+    
+    total_users = len(users)
+    total_records = sum(u['total_entries'] for u in users)
+    total_profit = sum(u['total_profit'] for u in users)
+    
+    return render_template(
+        'admin.html',
+        users=users,
+        total_users=total_users,
+        total_records=total_records,
+        total_profit=total_profit
+    )
+
+
+@app.route('/admin/switch_user/<int:target_user_id>')
+@admin_required
+def admin_switch_user(target_user_id):
+    """관리자가 특정 약국의 계정으로 전환하여 데이터를 점검/둘러보기"""
+    conn = get_db()
+    target_user = conn.execute('SELECT * FROM users WHERE id = ?', (target_user_id,)).fetchone()
+    conn.close()
+
+    if not target_user:
+        flash('존재하지 않는 회원입니다.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    # 원래 관리자의 user_id를 기억 (이미 스위칭 중이 아니었을 때만 저장)
+    if 'original_admin_id' not in session:
+        session['original_admin_id'] = session['user_id']
+        session['original_admin_user'] = session['username']
+
+    session['user_id'] = target_user['id']
+    session['username'] = target_user['username']
+    session['pharmacy_name'] = target_user['pharmacy_name']
+
+    flash(f"🔍 [{target_user['pharmacy_name']}] 계정으로 화면이 전환되었습니다. 관리자 복귀는 상단 배너를 클릭하세요.", 'info')
     return redirect(url_for('dashboard'))
+
+
+@app.route('/admin/switch_back')
+def admin_switch_back():
+    """관리자 원래 계정으로 복귀"""
+    if 'original_admin_id' in session:
+        admin_id = session['original_admin_id']
+        conn = get_db()
+        admin_user = conn.execute('SELECT * FROM users WHERE id = ?', (admin_id,)).fetchone()
+        conn.close()
+
+        if admin_user:
+            session['user_id'] = admin_user['id']
+            session['username'] = admin_user['username']
+            session['pharmacy_name'] = admin_user['pharmacy_name']
+
+        session.pop('original_admin_id', None)
+        session.pop('original_admin_user', None)
+        flash('관리자(admin) 계정으로 안전하게 복귀하였습니다.', 'success')
+
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/delete_user/<int:target_user_id>', methods=['POST'])
+@admin_required
+def admin_delete_user(target_user_id):
+    """테스트 계정 또는 회원 데이터 삭제"""
+    conn = get_db()
+    target_user = conn.execute('SELECT * FROM users WHERE id = ?', (target_user_id,)).fetchone()
+    conn.close()
+
+    if not target_user:
+        flash('해당 회원을 찾을 수 없습니다.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    if target_user['username'] == 'admin' or target_user['id'] == 1:
+        flash('관리자(admin) 본인 계정은 삭제할 수 없습니다.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    p_name = target_user['pharmacy_name']
+    delete_user_and_data(target_user_id)
+    flash(f"'{p_name}' 계정 및 등록된 모든 데이터가 삭제되었습니다.", 'warning')
+    return redirect(url_for('admin_dashboard'))
 
 
 if __name__ == '__main__':
