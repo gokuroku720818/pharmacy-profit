@@ -92,17 +92,25 @@ def is_postgres():
 
 
 def adapt_sql_for_postgres(sql):
-    """SQLite 전용 쿼리를 PostgreSQL 문법으로 호환 변환"""
-    sql = sql.replace('?', '%s')
-    sql = sql.replace("datetime('now', 'localtime')", "NOW()")
-
+    """SQLite 전용 쿼리를 PostgreSQL 문법으로 호환 변환 (괄호 누락 방지)"""
     # 1. INSERT OR REPLACE INTO daily_profit
     if 'INSERT OR REPLACE INTO daily_profit' in sql:
-        m = re.search(r'INSERT OR REPLACE INTO daily_profit\s*\((.*?)\)\s*VALUES\s*\((.*?)\)', sql, re.DOTALL | re.IGNORECASE)
-        if m:
-            cols = m.group(1)
-            vals = m.group(2)
-            sql = f"""
+        vals_idx = sql.upper().find('VALUES')
+        if vals_idx != -1:
+            header_part = sql[:vals_idx]
+            values_part = sql[vals_idx:]
+
+            c_start = header_part.find('(')
+            c_end = header_part.rfind(')')
+            cols = header_part[c_start+1:c_end].strip()
+
+            v_start = values_part.find('(')
+            v_end = values_part.rfind(')')
+            vals = values_part[v_start+1:v_end].strip()
+
+            vals = vals.replace('?', '%s').replace("datetime('now', 'localtime')", "NOW()")
+
+            return f"""
                 INSERT INTO daily_profit ({cols})
                 VALUES ({vals})
                 ON CONFLICT (user_id, date) DO UPDATE SET
@@ -118,11 +126,22 @@ def adapt_sql_for_postgres(sql):
 
     # 2. INSERT OR REPLACE INTO monthly_summary
     elif 'INSERT OR REPLACE INTO monthly_summary' in sql:
-        m = re.search(r'INSERT OR REPLACE INTO monthly_summary\s*\((.*?)\)\s*VALUES\s*\((.*?)\)', sql, re.DOTALL | re.IGNORECASE)
-        if m:
-            cols = m.group(1)
-            vals = m.group(2)
-            sql = f"""
+        vals_idx = sql.upper().find('VALUES')
+        if vals_idx != -1:
+            header_part = sql[:vals_idx]
+            values_part = sql[vals_idx:]
+
+            c_start = header_part.find('(')
+            c_end = header_part.rfind(')')
+            cols = header_part[c_start+1:c_end].strip()
+
+            v_start = values_part.find('(')
+            v_end = values_part.rfind(')')
+            vals = values_part[v_start+1:v_end].strip()
+
+            vals = vals.replace('?', '%s')
+
+            return f"""
                 INSERT INTO monthly_summary ({cols})
                 VALUES ({vals})
                 ON CONFLICT (user_id, year, month) DO UPDATE SET
@@ -132,8 +151,12 @@ def adapt_sql_for_postgres(sql):
                     prev_month_diff = EXCLUDED.prev_month_diff
             """
 
+    # 일반 쿼리 변환
+    sql = sql.replace('?', '%s')
+    sql = sql.replace("datetime('now', 'localtime')", "NOW()")
+
     # 3. INSERT INTO users (RETURNING id 로 lastrowid 지원)
-    elif 'INSERT INTO users' in sql and 'RETURNING id' not in sql:
+    if 'INSERT INTO users' in sql and 'RETURNING id' not in sql:
         sql = sql.rstrip().rstrip(';') + ' RETURNING id'
 
     return sql
