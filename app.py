@@ -631,9 +631,50 @@ def trend():
                            heatmap_data=heatmap_data)
 
 
-# ==========================================
-# 📂 엑셀 파일 업로드 및 자동 가져오기 라우트
-# ==========================================
+@app.route('/download_template')
+@login_required
+def download_template():
+    """표준 엑셀 양식 다운로드"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "일별순익_입력양식"
+
+    headers = ["날짜(YYYY-MM-DD)", "요일", "조제료(원)", "일매순익(원)", "비보험약가차액(원)", "메모"]
+    ws.append(headers)
+
+    # 샘플 데이터 3행
+    sample_rows = [
+        ["2026-09-15", "화", 572890, 205997, 156934, "샘플 데이터 1"],
+        ["2026-09-16", "수", 316570, 185322, 287476, "샘플 데이터 2"],
+        ["2026-09-17", "목", 190010, 200664, 227933, "샘플 데이터 3"]
+    ]
+    for row in sample_rows:
+        ws.append(row)
+
+    header_fill = openpyxl.styles.PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    header_font = openpyxl.styles.Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+
+    for col in ws.columns:
+        col_letter = openpyxl.utils.get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = 20
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='약국순익_표준업로드양식.xlsx'
+    )
+
 
 @app.route('/upload_excel', methods=['POST'])
 @login_required
@@ -666,10 +707,58 @@ def upload_excel():
         else:
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
 
-        # 데이터베이스 임포트
         conn = get_db()
         cursor = conn.cursor()
+        imported_count = 0
+        touched_months = set()
 
+        # [모드 1] 표준 템플릿 양식 감지
+        first_ws = wb.active
+        first_row_vals = [str(first_ws.cell(1, c).value or '') for c in range(1, 7)]
+        is_standard_template = any('날짜' in v for v in first_row_vals) and any('조제' in v for v in first_row_vals)
+
+        if is_standard_template:
+            for r in range(2, first_ws.max_row + 1):
+                raw_date = first_ws.cell(r, 1).value
+                if not raw_date:
+                    continue
+                date_str = str(raw_date)[:10].strip()
+                if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+                    continue
+
+                dow = str(first_ws.cell(r, 2).value or '')
+                def s_int(c):
+                    v = first_ws.cell(r, c).value
+                    try: return int(v) if v else 0
+                    except: return 0
+
+                disp = s_int(3)
+                daily = s_int(4)
+                nim = s_int(5)
+                memo = str(first_ws.cell(r, 6).value or '')
+
+                dpd = disp + daily
+                tot = dpd + nim
+
+                cursor.execute('''
+                    INSERT OR REPLACE INTO daily_profit
+                    (user_id, date, day_of_week, dispensing_fee, daily_net_profit,
+                     dispensing_plus_daily, non_insurance_margin, total, memo, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                ''', (user_id, date_str, dow, disp, daily, dpd, nim, tot, memo))
+                imported_count += 1
+                touched_months.add((int(date_str[:4]), int(date_str[5:7])))
+
+            # 변경된 월 통계 자동 재계산
+            for yr, mo in touched_months:
+                recalc_monthly_summary(conn, user_id, yr, mo)
+
+            conn.commit()
+            conn.close()
+            flash(f'🎉 표준 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 데이터가 등록되었습니다)', 'success')
+            return redirect(url_for('dashboard'))
+
+        # [모드 2] 기존 순익표 (주표 + 합계) 시트 구조 처리
         # 합계 시트 (2번째 시트)
         if len(wb.sheetnames) >= 2:
             ws_sum = wb[wb.sheetnames[1]]
