@@ -1,5 +1,8 @@
 param([string]$ImagePath)
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 [void][System.Reflection.Assembly]::LoadWithPartialName('System.Runtime.WindowsRuntime')
 [void][Windows.Globalization.Language, Windows.Globalization, ContentType = WindowsRuntime]
 [void][Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType = WindowsRuntime]

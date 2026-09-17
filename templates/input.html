@@ -14,9 +14,9 @@
             <span class="fw-bold fs-5 text-primary"><i class="fas fa-camera me-2"></i>스크린샷 3장으로 1초 자동 입력</span>
             <small class="text-muted d-block mt-1">프로그램 마감화면 캡처(Win+Shift+S) 후 각 박스에 붙여넣기(Ctrl+V) 또는 파일 선택</small>
         </div>
-        <button type="button" class="btn btn-sm btn-outline-primary" onclick="applySampleDemo()">
-            <i class="fas fa-vial me-1"></i> 오늘 스크린샷 값 자동채우기 (테스트)
-        </button>
+        <span class="badge bg-primary text-white px-3 py-2">
+            <i class="fas fa-magic me-1"></i> 스크린샷 인식 시 자동 계산
+        </span>
     </div>
     <div class="card-body p-4">
         <div class="row g-3 mb-3">
@@ -240,7 +240,7 @@
 .drop-zone:hover { background-color: #f0f7ff !important; }
 </style>
 
-<script src="{{ url_for('static', filename='js/tesseract.min.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="{{ url_for('static', filename='js/ocr_extract.js') }}"></script>
 <script>
 let lastFocusedSlot = 1;
@@ -338,19 +338,6 @@ function applyToForm() {
     document.getElementById('dispensing_fee').focus();
 }
 
-// 사용자 예시 스크린샷 3장 샘플 값 즉시 적용 (테스트용)
-function applySampleDemo() {
-    document.getElementById('date').value = '2026-09-17';
-    document.getElementById('val1').value = 390674; // 스샷 1
-    document.getElementById('val2').value = 190010; // 스샷 2
-    document.getElementById('val3').value = 227933; // 스샷 3
-    document.getElementById('status1').textContent = '완료 (390,674원)';
-    document.getElementById('status2').textContent = '완료 (190,010원)';
-    document.getElementById('status3').textContent = '완료 (227,933원)';
-
-    recalcFromShots();
-    applyToForm();
-}
 
 function updatePreview() {
     const d = parseInt(document.getElementById('dispensing_fee').value) || 0;
