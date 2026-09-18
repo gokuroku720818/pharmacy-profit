@@ -3,7 +3,7 @@
 """
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, session
 from werkzeug.security import generate_password_hash, check_password_hash
-from database import get_db, init_db, recalc_monthly_summary, get_all_users_stats, delete_user_and_data
+from database import get_db, init_db, recalc_monthly_summary, get_all_users_stats, delete_user_and_data, get_pool_status
 from functools import wraps
 import datetime
 import calendar
@@ -1595,6 +1595,27 @@ def admin_export_backup():
     finally:
         if conn:
             conn.close()
+
+
+@app.route('/debug/perf')
+def debug_perf():
+    """서버 및 DB 커넥션 풀 성능 실시간 진단 API"""
+    t0 = time.time()
+    conn = get_db()
+    t_conn = time.time() - t0
+
+    t1 = time.time()
+    cur = conn.execute("SELECT 1")
+    cur.fetchall()
+    t_query = time.time() - t1
+    conn.close()
+
+    return jsonify({
+        'conn_time_sec': round(t_conn, 3),
+        'query_time_sec': round(t_query, 3),
+        'total_time_sec': round(time.time() - t0, 3),
+        'pool_status': get_pool_status()
+    })
 
 
 # ==========================================

@@ -15,10 +15,11 @@ except ImportError:
 
 _pg_pool = None
 _pg_pool_lock = threading.Lock()
+_pool_error = None
 
 
 def get_pg_pool():
-    global _pg_pool
+    global _pg_pool, _pool_error
     if _pg_pool is None and psycopg2 and ThreadedConnectionPool:
         with _pg_pool_lock:
             # 더블 체크: 락 획득 사이에 다른 스레드가 이미 생성했을 수 있음
@@ -27,10 +28,22 @@ def get_pg_pool():
                 if db_url:
                     try:
                         _pg_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url, cursor_factory=RealDictCursor)
+                        _pool_error = None
                         print("⚡ PostgreSQL 커넥션 풀 활성화 완료 (고속 재사용 모드)")
                     except Exception as e:
+                        _pool_error = str(e)
                         print(f"커넥션 풀 생성 실패: {e}")
     return _pg_pool
+
+
+def get_pool_status():
+    global _pg_pool, _pool_error
+    return {
+        'pool_active': _pg_pool is not None,
+        'pool_error': _pool_error,
+        'psycopg2_available': psycopg2 is not None,
+        'is_postgres': is_postgres(),
+    }
 
 
 class PostgresConnectionWrapper:
@@ -132,26 +145,8 @@ SQLITE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'sales.db')
 
 def get_database_url():
     url = os.environ.get('DATABASE_URL')
-    if url:
-        if url.startswith('postgres://'):
-            url = url.replace('postgres://', 'postgresql://', 1)
-        # TCP Keepalive 및 타임아웃 파라미터 적용 (유휴 소켓 단절 방지)
-        params = []
-        if 'connect_timeout=' not in url:
-            params.append('connect_timeout=5')
-        if 'keepalives=' not in url:
-            params.append('keepalives=1')
-        if 'keepalives_idle=' not in url:
-            params.append('keepalives_idle=30')
-        if 'keepalives_interval=' not in url:
-            params.append('keepalives_interval=10')
-        if 'keepalives_count=' not in url:
-            params.append('keepalives_count=3')
-        if 'sslmode=' not in url:
-            params.append('sslmode=require')
-        if params:
-            delim = '&' if '?' in url else '?'
-            url = url + delim + '&'.join(params)
+    if url and url.startswith('postgres://'):
+        url = url.replace('postgres://', 'postgresql://', 1)
     return url
 
 
