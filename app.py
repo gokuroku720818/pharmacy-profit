@@ -127,13 +127,68 @@ def get_cached_dow_avg(conn=None, user_id=None):
             conn.close()
 
 
+# ⚡ 관리자 콘솔 스마트 캐시
+_ADMIN_CACHE = {}
+
+
+def get_cached_calculator_settings(conn=None, user_id=None):
+    """사용자의 계산기 설정값 캐시 (캐시 히트 시 DB 연결/쿼리 0회, 0ms 즉시 반환)"""
+    now = time.time()
+    with _CACHE_LOCK:
+        if user_id in _USER_CACHE:
+            entry = _USER_CACHE[user_id].get('calculator_settings')
+            if entry and (now - entry['ts'] < _CACHE_TTL):
+                return entry['data']
+
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        row = conn.execute('SELECT * FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
+        data = dict(row) if row else None
+        if data:
+            for k in ('otc_margin_rate', 'card_fee_rate'):
+                if k in data and data[k] is not None:
+                    data[k] = float(data[k])
+        with _CACHE_LOCK:
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['calculator_settings'] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_cached_admin_stats():
+    """관리자 콘솔 회원 목록 및 통계 캐시 (캐시 히트 시 DB 연결/쿼리 0회, 0ms 즉시 반환)"""
+    now = time.time()
+    with _CACHE_LOCK:
+        entry = _ADMIN_CACHE.get('stats')
+        if entry and (now - entry['ts'] < _CACHE_TTL):
+            return entry['data']
+
+    users = get_all_users_stats()
+    with _CACHE_LOCK:
+        _ADMIN_CACHE['stats'] = {'ts': now, 'data': users}
+    return users
+
+
+def invalidate_admin_cache():
+    """회원 정보 또는 데이터 변경 시 관리자 캐시 무효화"""
+    with _CACHE_LOCK:
+        _ADMIN_CACHE.clear()
+
+
 def invalidate_user_cache(user_id=None):
-    """데이터 변경 시 해당 사용자의 인메모리 캐시 즉시 무효화 (실시간 정합성 보장)"""
+    """데이터 변경 시 해당 사용자의 인메모리 캐시 및 관리자 캐시 즉시 무효화 (실시간 정합성 보장)"""
     with _CACHE_LOCK:
         if user_id is None:
             _USER_CACHE.clear()
         elif user_id in _USER_CACHE:
             _USER_CACHE.pop(user_id, None)
+        _ADMIN_CACHE.clear()
 
 
 # 서버 구동 시 DB 및 스키마 자동 초기화
@@ -550,6 +605,8 @@ def register():
             new_id = cursor.lastrowid
         finally:
             conn.close()
+
+        invalidate_admin_cache()
 
         session['user_id'] = new_id
         session['username'] = username
@@ -1139,70 +1196,57 @@ def trend():
 @login_required
 def calculator():
     user_id = session['user_id']
-    conn = get_db()
-    try:
-        # 기존 저장된 계산기 설정값 조회
-        row = conn.execute('SELECT * FROM user_calculator_settings WHERE user_id = ?', (user_id,)).fetchone()
 
-        defaults = {
-            'dispensing_fee': 15000000,
-            'dispensing_cut': 0,
-            'non_insurance_fee': 500000,
-            'non_insurance_margin': 1500000,
-            'otc_calc_mode': 'direct',
-            'monthly_otc_net_profit': 8000000,
-            'daily_otc_sales': 1000000,
-            'work_days': 25,
-            'otc_margin_rate': 0.35,
-            'monthly_drug_cost': 45000000,
-            'pharmacist_salary': 4000000,
-            'staff_salary': 2500000,
-            'meal_cost': 300000,
-            'rent_cost': 3300000,
-            'maintenance_cost': 300000,
-            'supplies_cost': 0,
-            'software_cost': 110000,
-            'barcode_cost': 0,
-            'electricity_cost': 250000,
-            'communication_cost': 50000,
-            'water_purifier_cost': 30000,
-            'security_cost': 70000,
-            'tax_accountant_cost': 150000,
-            'association_fee': 50000,
-            'card_fee_rate': 0.02
-        }
+    defaults = {
+        'dispensing_fee': 15000000,
+        'dispensing_cut': 0,
+        'non_insurance_fee': 500000,
+        'non_insurance_margin': 1500000,
+        'otc_calc_mode': 'direct',
+        'monthly_otc_net_profit': 8000000,
+        'daily_otc_sales': 1000000,
+        'work_days': 25,
+        'otc_margin_rate': 0.35,
+        'monthly_drug_cost': 45000000,
+        'pharmacist_salary': 4000000,
+        'staff_salary': 2500000,
+        'meal_cost': 300000,
+        'rent_cost': 3300000,
+        'maintenance_cost': 300000,
+        'supplies_cost': 0,
+        'software_cost': 110000,
+        'barcode_cost': 0,
+        'electricity_cost': 250000,
+        'communication_cost': 50000,
+        'water_purifier_cost': 30000,
+        'security_cost': 70000,
+        'tax_accountant_cost': 150000,
+        'association_fee': 50000,
+        'card_fee_rate': 0.02
+    }
 
-        if row:
-            settings = dict(row)
-            # Decimal→float 변환 (PostgreSQL NUMERIC 타입 대응)
-            for k in ('otc_margin_rate', 'card_fee_rate'):
-                if k in settings and settings[k] is not None:
-                    settings[k] = float(settings[k])
-        else:
-            settings = defaults
+    # ⚡ 캐시된 설정값 조회 (캐시 히트 시 DB 연결/쿼리 0회, 0.001초 반환)
+    saved_settings = get_cached_calculator_settings(None, user_id)
+    if saved_settings:
+        settings = dict(saved_settings)
+    else:
+        settings = defaults
 
-        # 현재 월 실적 조회 (원클릭 자동 불러오기용)
-        today = datetime.date.today()
-        cur_month_prefix = f"{today.year}-{today.month:02d}"
-        stats_row = conn.execute('''
-            SELECT 
-                COALESCE(SUM(dispensing_fee), 0) as disp,
-                COALESCE(SUM(daily_net_profit), 0) as daily,
-                COALESCE(SUM(non_insurance_margin), 0) as nim,
-                COUNT(*) as days
-            FROM daily_profit
-            WHERE user_id = ? AND date LIKE ?
-        ''', (user_id, cur_month_prefix + '%')).fetchone()
+    # ⚡ 현재 월 실적 조회 (원클릭 자동 불러오기용) - 캐시된 당월 일별 데이터 활용
+    today = datetime.date.today()
+    cur_month_rows = get_cached_current_month_dailies(None, user_id, today.year, today.month)
+    disp = sum(int(r.get('dispensing_fee') or 0) for r in cur_month_rows)
+    daily = sum(int(r.get('daily_net_profit') or 0) for r in cur_month_rows)
+    nim = sum(int(r.get('non_insurance_margin') or 0) for r in cur_month_rows)
+    days = len(cur_month_rows)
 
-        cur_stats = {
-            'has_data': stats_row and (int(stats_row['disp'] or 0) > 0 or int(stats_row['daily'] or 0) > 0),
-            'disp': int(stats_row['disp'] or 0) if stats_row else 0,
-            'daily': int(stats_row['daily'] or 0) if stats_row else 0,
-            'nim': int(stats_row['nim'] or 0) if stats_row else 0,
-            'days': int(stats_row['days'] or 0) if stats_row else 0
-        }
-    finally:
-        conn.close()
+    cur_stats = {
+        'has_data': (disp > 0 or daily > 0),
+        'disp': disp,
+        'daily': daily,
+        'nim': nim,
+        'days': days
+    }
     return render_template('calculator.html', settings=settings, cur_stats=cur_stats)
 
 
@@ -1235,6 +1279,7 @@ def save_calculator_settings():
             conn.execute(f"INSERT INTO user_calculator_settings ({col_clause}) VALUES ({val_clause})", params)
 
         conn.commit()
+        invalidate_user_cache(user_id)
     finally:
         conn.close()
     return jsonify({'success': True, 'message': '계산기 설정값이 안전하게 저장되었습니다.'})
@@ -1487,7 +1532,7 @@ def upload_excel():
 @admin_required
 def admin_dashboard():
     try:
-        users = get_all_users_stats()
+        users = get_cached_admin_stats()
         
         total_users = len(users)
         total_records = sum(int(u['total_entries'] or 0) for u in users)
