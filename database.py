@@ -132,8 +132,26 @@ SQLITE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'sales.db')
 
 def get_database_url():
     url = os.environ.get('DATABASE_URL')
-    if url and url.startswith('postgres://'):
-        url = url.replace('postgres://', 'postgresql://', 1)
+    if url:
+        if url.startswith('postgres://'):
+            url = url.replace('postgres://', 'postgresql://', 1)
+        # TCP Keepalive 및 타임아웃 파라미터 적용 (유휴 소켓 단절 방지)
+        params = []
+        if 'connect_timeout=' not in url:
+            params.append('connect_timeout=5')
+        if 'keepalives=' not in url:
+            params.append('keepalives=1')
+        if 'keepalives_idle=' not in url:
+            params.append('keepalives_idle=30')
+        if 'keepalives_interval=' not in url:
+            params.append('keepalives_interval=10')
+        if 'keepalives_count=' not in url:
+            params.append('keepalives_count=3')
+        if 'sslmode=' not in url:
+            params.append('sslmode=require')
+        if params:
+            delim = '&' if '?' in url else '?'
+            url = url + delim + '&'.join(params)
     return url
 
 
