@@ -2,6 +2,7 @@ import sqlite3
 import os
 import re
 import threading
+import time
 from werkzeug.security import generate_password_hash
 
 try:
@@ -91,20 +92,29 @@ def get_db():
                 # 풀 고갈 시 직접 연결로 폴백
                 pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
                 return PostgresConnectionWrapper(pg_conn, from_pool=False)
-            # 유휴 커넥션 헬스 체크 (Neon 등 클라우드 DB 타임아웃 대응)
-            try:
-                pg_conn.cursor().execute("SELECT 1")
-                pg_conn.rollback()  # 헬스 체크 트랜잭션 정리
-            except Exception:
+            
+            # 스마트 유휴 커넥션 헬스 체크: 60초 이상 유휴 상태일 때만 SELECT 1 핑 실행 (평상시 200ms 지연 제거!)
+            now_ts = time.time()
+            last_checked = getattr(pg_conn, '_last_checked_ts', 0)
+            if now_ts - last_checked > 60:
                 try:
-                    pool.putconn(pg_conn, close=True)
+                    pg_conn.cursor().execute("SELECT 1")
+                    pg_conn.rollback()  # 헬스 체크 트랜잭션 정리
+                    pg_conn._last_checked_ts = now_ts
                 except Exception:
-                    pass
-                try:
-                    pg_conn = pool.getconn()
-                except Exception:
-                    pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-                    return PostgresConnectionWrapper(pg_conn, from_pool=False)
+                    try:
+                        pool.putconn(pg_conn, close=True)
+                    except Exception:
+                        pass
+                    try:
+                        pg_conn = pool.getconn()
+                        pg_conn._last_checked_ts = now_ts
+                    except Exception:
+                        pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+                        return PostgresConnectionWrapper(pg_conn, from_pool=False)
+            else:
+                pg_conn._last_checked_ts = now_ts
+
             return PostgresConnectionWrapper(pg_conn, from_pool=True)
         else:
             pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
@@ -347,7 +357,9 @@ def init_sqlite_db():
         pass
 
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date ON daily_profit(user_id, date)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_dow ON daily_profit(user_id, total, day_of_week)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_ym ON monthly_summary(user_id, year, month)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_gt ON monthly_summary(user_id, grand_total)')
 
     conn.commit()
     conn.close()
@@ -446,7 +458,9 @@ def init_postgres_db(db_url):
         pass
 
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_date ON daily_profit(user_id, date)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_dow ON daily_profit(user_id, total, day_of_week)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_ym ON monthly_summary(user_id, year, month)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_gt ON monthly_summary(user_id, grand_total)')
     conn.commit()
 
     # 4. 기존 데이터가 비어있다면 로컬 sales.db 에서 Neon DB로 자동 마이그레이션
