@@ -576,6 +576,15 @@ def logout():
 @login_required
 def dashboard():
     user_id = session['user_id']
+
+    # ⚡ 대시보드 스마트 캐시 확인: 캐시 히트 시 DB 연결/쿼리 0회, 0.01초 즉시 렌더링!
+    now = time.time()
+    with _CACHE_LOCK:
+        if user_id in _USER_CACHE:
+            entry = _USER_CACHE[user_id].get('dashboard_ctx')
+            if entry and (now - entry['ts'] < _CACHE_TTL):
+                return render_template('dashboard.html', **entry['ctx'])
+
     conn = get_db()
     try:
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
@@ -592,8 +601,8 @@ def dashboard():
                 'diff': int(last_r['prev_month_diff'] or 0)
             }
         else:
-            now = datetime.date.today()
-            current_month = {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'grand_total': 0, 'diff': 0}
+            now_dt = datetime.date.today()
+            current_month = {'year': now_dt.year, 'month': now_dt.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'grand_total': 0, 'diff': 0}
 
         monthly_data = {
             'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
@@ -654,18 +663,27 @@ def dashboard():
                                                month_summary_row=rows[-1] if rows else None)
         narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast,
                                                        latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows)
+
+        dashboard_ctx = {
+            'current_month': current_month,
+            'monthly_data': monthly_data,
+            'current_month_data': current_month,
+            'year_compare': year_compare,
+            'forecast': forecast,
+            'yoy_day': yoy_day,
+            'balance': balance,
+            'narrative_briefing': narrative_briefing
+        }
+
+        # 캐시 저장
+        with _CACHE_LOCK:
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['dashboard_ctx'] = {'ts': now, 'ctx': dashboard_ctx}
     finally:
         conn.close()
 
-    return render_template('dashboard.html',
-                           current_month=current_month,
-                           monthly_data=monthly_data,
-                           current_month_data=current_month,
-                           year_compare=year_compare,
-                           forecast=forecast,
-                           yoy_day=yoy_day,
-                           balance=balance,
-                           narrative_briefing=narrative_briefing)
+    return render_template('dashboard.html', **dashboard_ctx)
 
 
 @app.route('/input', methods=['GET', 'POST'])
