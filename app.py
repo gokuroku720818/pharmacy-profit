@@ -28,8 +28,8 @@ _CACHE_LOCK = threading.Lock()
 _CACHE_TTL = 300  # 5분 유효
 
 
-def get_cached_monthly_summary(conn, user_id):
-    """사용자의 월별 요약 전체 목록 캐시 (캐시 히트 시 DB 쿼리 0회, 0ms 즉시 반환)"""
+def get_cached_monthly_summary(conn=None, user_id=None):
+    """사용자의 월별 요약 전체 목록 캐시 (캐시 히트 시 DB 연결/쿼리 0회, 0ms 즉시 반환)"""
     now = time.time()
     with _CACHE_LOCK:
         if user_id in _USER_CACHE:
@@ -37,23 +37,32 @@ def get_cached_monthly_summary(conn, user_id):
             if entry and (now - entry['ts'] < _CACHE_TTL):
                 return entry['data']
 
-    rows = conn.execute('''
-        SELECT year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff
-        FROM monthly_summary
-        WHERE user_id = ? AND grand_total > 0
-        ORDER BY year, month
-    ''', (user_id,)).fetchall()
+    # 캐시 미스 시에만 DB 연결 생성
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        rows = conn.execute('''
+            SELECT year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff
+            FROM monthly_summary
+            WHERE user_id = ? AND grand_total > 0
+            ORDER BY year, month
+        ''', (user_id,)).fetchall()
 
-    data = [dict(r) for r in rows]
-    with _CACHE_LOCK:
-        if user_id not in _USER_CACHE:
-            _USER_CACHE[user_id] = {}
-        _USER_CACHE[user_id]['monthly_summary'] = {'ts': now, 'data': data}
-    return data
+        data = [dict(r) for r in rows]
+        with _CACHE_LOCK:
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['monthly_summary'] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
 
 
-def get_cached_current_month_dailies(conn, user_id, cur_year, cur_month):
-    """사용자의 당월 일별 데이터 캐시"""
+def get_cached_current_month_dailies(conn=None, user_id=None, cur_year=None, cur_month=None):
+    """사용자의 당월 일별 데이터 캐시 (캐시 히트 시 DB 연결/쿼리 0회, 0ms 즉시 반환)"""
     now = time.time()
     cache_key = f'daily_{cur_year}_{cur_month:02d}'
     with _CACHE_LOCK:
@@ -62,24 +71,32 @@ def get_cached_current_month_dailies(conn, user_id, cur_year, cur_month):
             if entry and (now - entry['ts'] < _CACHE_TTL):
                 return entry['data']
 
-    date_prefix = f"{cur_year}-{cur_month:02d}"
-    cur_month_rows = conn.execute('''
-        SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
-        FROM daily_profit
-        WHERE user_id = ? AND date LIKE ?
-        ORDER BY date ASC
-    ''', (user_id, date_prefix + '%')).fetchall()
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        date_prefix = f"{cur_year}-{cur_month:02d}"
+        cur_month_rows = conn.execute('''
+            SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
+            FROM daily_profit
+            WHERE user_id = ? AND date LIKE ?
+            ORDER BY date ASC
+        ''', (user_id, date_prefix + '%')).fetchall()
 
-    data = [dict(r) for r in cur_month_rows]
-    with _CACHE_LOCK:
-        if user_id not in _USER_CACHE:
-            _USER_CACHE[user_id] = {}
-        _USER_CACHE[user_id][cache_key] = {'ts': now, 'data': data}
-    return data
+        data = [dict(r) for r in cur_month_rows]
+        with _CACHE_LOCK:
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id][cache_key] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
 
 
-def get_cached_dow_avg(conn, user_id):
-    """사용자의 요일별 평균 캐시"""
+def get_cached_dow_avg(conn=None, user_id=None):
+    """사용자의 요일별 평균 캐시 (캐시 히트 시 DB 연결/쿼리 0회, 0ms 즉시 반환)"""
     now = time.time()
     with _CACHE_LOCK:
         if user_id in _USER_CACHE:
@@ -87,19 +104,27 @@ def get_cached_dow_avg(conn, user_id):
             if entry and (now - entry['ts'] < _CACHE_TTL):
                 return entry['data']
 
-    dow_rows = conn.execute('''
-        SELECT day_of_week, AVG(total) as avg_total
-        FROM daily_profit
-        WHERE user_id = ? AND total > 0
-        GROUP BY day_of_week
-    ''', (user_id,)).fetchall()
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        dow_rows = conn.execute('''
+            SELECT day_of_week, AVG(total) as avg_total
+            FROM daily_profit
+            WHERE user_id = ? AND total > 0
+            GROUP BY day_of_week
+        ''', (user_id,)).fetchall()
 
-    data = {r['day_of_week']: int(r['avg_total'] or 0) for r in dow_rows}
-    with _CACHE_LOCK:
-        if user_id not in _USER_CACHE:
-            _USER_CACHE[user_id] = {}
-        _USER_CACHE[user_id]['dow_avg'] = {'ts': now, 'data': data}
-    return data
+        data = {r['day_of_week']: int(r['avg_total'] or 0) for r in dow_rows}
+        with _CACHE_LOCK:
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['dow_avg'] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
 
 
 def invalidate_user_cache(user_id=None):
@@ -827,139 +852,135 @@ def generate_annual_narrative_report(year, report_data, year_total, last_year_to
 @login_required
 def report():
     user_id = session['user_id']
-    conn = get_db()
-    try:
-        # [초고속 스마트 캐시 연산] 캐시 히트 시 DB 쿼리 0회! (0ms 즉각 반환)
-        raw_rows = get_cached_monthly_summary(conn, user_id)
-        all_rows = sorted(raw_rows, key=lambda r: (-int(r['year']), int(r['month'])))
+    # [초고속 스마트 캐시 연산] 캐시 히트 시 DB 연결/쿼리 0회! (0ms 즉각 반환)
+    raw_rows = get_cached_monthly_summary(None, user_id)
+    all_rows = sorted(raw_rows, key=lambda r: (-int(r['year']), int(r['month'])))
 
-        years = sorted(list(set(int(r['year']) for r in all_rows)), reverse=True)
-        selected_year = request.args.get('year', years[0] if years else datetime.date.today().year, type=int)
-        last_year = selected_year - 1
+    years = sorted(list(set(int(r['year']) for r in all_rows)), reverse=True)
+    selected_year = request.args.get('year', years[0] if years else datetime.date.today().year, type=int)
+    last_year = selected_year - 1
 
-        report_data = []
-        year_dpd = 0
-        year_nim = 0
-        year_grand = 0
+    report_data = []
+    year_dpd = 0
+    year_nim = 0
+    year_grand = 0
 
-        last_year_dpd = 0
-        last_year_nim = 0
-        last_year_grand = 0
-        last_12m = [0] * 12
+    last_year_dpd = 0
+    last_year_nim = 0
+    last_year_grand = 0
+    last_12m = [0] * 12
 
-        for r in all_rows:
-            yr = int(r['year'])
-            mo = int(r['month'])
-            dpd = int(r['dispensing_plus_daily_total'] or 0)
-            nim = int(r['non_insurance_total'] or 0)
-            gt = int(r['grand_total'] or 0)
-            diff = int(r['prev_month_diff'] or 0)
+    for r in all_rows:
+        yr = int(r['year'])
+        mo = int(r['month'])
+        dpd = int(r['dispensing_plus_daily_total'] or 0)
+        nim = int(r['non_insurance_total'] or 0)
+        gt = int(r['grand_total'] or 0)
+        diff = int(r['prev_month_diff'] or 0)
 
-            if yr == selected_year:
-                report_data.append({
-                    'month': mo,
-                    'dispensing_plus_daily_total': dpd,
-                    'non_insurance_total': nim,
-                    'grand_total': gt,
-                    'prev_month_diff': diff
-                })
-                year_dpd += dpd
-                year_nim += nim
-                year_grand += gt
-            elif yr == last_year:
-                last_year_dpd += dpd
-                last_year_nim += nim
-                last_year_grand += gt
-                if 1 <= mo <= 12:
-                    last_12m[mo - 1] = gt
+        if yr == selected_year:
+            report_data.append({
+                'month': mo,
+                'dispensing_plus_daily_total': dpd,
+                'non_insurance_total': nim,
+                'grand_total': gt,
+                'prev_month_diff': diff
+            })
+            year_dpd += dpd
+            year_nim += nim
+            year_grand += gt
+        elif yr == last_year:
+            last_year_dpd += dpd
+            last_year_nim += nim
+            last_year_grand += gt
+            if 1 <= mo <= 12:
+                last_12m[mo - 1] = gt
 
-        report_data.sort(key=lambda x: x['month'])
+    report_data.sort(key=lambda x: x['month'])
 
-        year_total = {
-            'dpd': year_dpd,
-            'nim': year_nim,
-            'grand': year_grand
+    year_total = {
+        'dpd': year_dpd,
+        'nim': year_nim,
+        'grand': year_grand
+    }
+
+    last_year_total = None
+    if last_year_grand > 0:
+        last_year_total = {
+            'dpd': last_year_dpd,
+            'nim': last_year_nim,
+            'grand': last_year_grand
         }
 
-        last_year_total = None
-        if last_year_grand > 0:
-            last_year_total = {
-                'dpd': last_year_dpd,
-                'nim': last_year_nim,
-                'grand': last_year_grand
-            }
+    # 전년 대비 성장률
+    yoy_growth_pct = None
+    yoy_diff = 0
+    if last_year_total and last_year_total['grand'] > 0:
+        yoy_diff = year_total['grand'] - last_year_total['grand']
+        yoy_growth_pct = round((yoy_diff / float(last_year_total['grand'])) * 100, 1)
 
-        # 전년 대비 성장률
-        yoy_growth_pct = None
-        yoy_diff = 0
-        if last_year_total and last_year_total['grand'] > 0:
-            yoy_diff = year_total['grand'] - last_year_total['grand']
-            yoy_growth_pct = round((yoy_diff / float(last_year_total['grand'])) * 100, 1)
+    # 최고/최저 실적 달
+    best_month = max(report_data, key=lambda r: r['grand_total']) if report_data else None
+    worst_month = min(report_data, key=lambda r: r['grand_total']) if report_data else None
+    months_count = len(report_data)
+    avg_monthly = (year_total['grand'] // months_count) if months_count > 0 else 0
 
-        # 최고/최저 실적 달
-        best_month = max(report_data, key=lambda r: r['grand_total']) if report_data else None
-        worst_month = min(report_data, key=lambda r: r['grand_total']) if report_data else None
-        months_count = len(report_data)
-        avg_monthly = (year_total['grand'] // months_count) if months_count > 0 else 0
+    # 비보험 및 조제 비중
+    nim_pct = round((float(year_total['nim']) / float(year_total['grand'])) * 100, 1) if year_total['grand'] > 0 else 0
+    dpd_pct = round(100.0 - nim_pct, 1)
 
-        # 비보험 및 조제 비중
-        nim_pct = round((float(year_total['nim']) / float(year_total['grand'])) * 100, 1) if year_total['grand'] > 0 else 0
-        dpd_pct = round(100.0 - nim_pct, 1)
+    # 분기별 실적 집계 (Q1~Q4)
+    quarters = [
+        {'quarter': 1, 'name': '1분기 (1~3월)', 'months': [1, 2, 3], 'total': 0, 'dpd': 0, 'nim': 0},
+        {'quarter': 2, 'name': '2분기 (4~6월)', 'months': [4, 5, 6], 'total': 0, 'dpd': 0, 'nim': 0},
+        {'quarter': 3, 'name': '3분기 (7~9월)', 'months': [7, 8, 9], 'total': 0, 'dpd': 0, 'nim': 0},
+        {'quarter': 4, 'name': '4분기 (10~12월)', 'months': [10, 11, 12], 'total': 0, 'dpd': 0, 'nim': 0}
+    ]
+    for r in report_data:
+        m = r['month']
+        q_idx = (m - 1) // 3
+        quarters[q_idx]['total'] += r['grand_total']
+        quarters[q_idx]['dpd'] += r['dispensing_plus_daily_total']
+        quarters[q_idx]['nim'] += r['non_insurance_total']
 
-        # 분기별 실적 집계 (Q1~Q4)
-        quarters = [
-            {'quarter': 1, 'name': '1분기 (1~3월)', 'months': [1, 2, 3], 'total': 0, 'dpd': 0, 'nim': 0},
-            {'quarter': 2, 'name': '2분기 (4~6월)', 'months': [4, 5, 6], 'total': 0, 'dpd': 0, 'nim': 0},
-            {'quarter': 3, 'name': '3분기 (7~9월)', 'months': [7, 8, 9], 'total': 0, 'dpd': 0, 'nim': 0},
-            {'quarter': 4, 'name': '4분기 (10~12월)', 'months': [10, 11, 12], 'total': 0, 'dpd': 0, 'nim': 0}
-        ]
-        for r in report_data:
-            m = r['month']
-            q_idx = (m - 1) // 3
-            quarters[q_idx]['total'] += r['grand_total']
-            quarters[q_idx]['dpd'] += r['dispensing_plus_daily_total']
-            quarters[q_idx]['nim'] += r['non_insurance_total']
+    # 연간 줄글 분석 생성
+    narrative_paragraphs = generate_annual_narrative_report(
+        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters
+    )
 
-        # 연간 줄글 분석 생성
-        narrative_paragraphs = generate_annual_narrative_report(
-            selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters
-        )
+    # 12개월 전체 배열 (작년 vs 올해 콤보 차트용)
+    cur_12m = [0] * 12
+    for r in report_data:
+        cur_12m[r['month'] - 1] = int(r['grand_total'])
 
-        # 12개월 전체 배열 (작년 vs 올해 콤보 차트용)
-        cur_12m = [0] * 12
-        for r in report_data:
-            cur_12m[r['month'] - 1] = int(r['grand_total'])
+    chart_payload = {
+        'labels': [f'{m}월' for m in range(1, 13)],
+        'cur_year': cur_12m,
+        'cur_dpd': [int(r['dispensing_plus_daily_total']) for r in report_data],
+        'cur_nim': [int(r['non_insurance_total']) for r in report_data],
+        'last_year': last_12m,
+        'has_last_year': any(v > 0 for v in last_12m),
+        'quarters_labels': [q['name'] for q in quarters],
+        'quarters_totals': [int(q['total']) for q in quarters],
+        'composition': [int(year_total['dpd']), int(year_total['nim'])]
+    }
 
-        chart_payload = {
-            'labels': [f'{m}월' for m in range(1, 13)],
-            'cur_year': cur_12m,
-            'cur_dpd': [int(r['dispensing_plus_daily_total']) for r in report_data],
-            'cur_nim': [int(r['non_insurance_total']) for r in report_data],
-            'last_year': last_12m,
-            'has_last_year': any(v > 0 for v in last_12m),
-            'quarters_labels': [q['name'] for q in quarters],
-            'quarters_totals': [int(q['total']) for q in quarters],
-            'composition': [int(year_total['dpd']), int(year_total['nim'])]
-        }
-
-        return render_template('report.html',
-                               years=years,
-                               selected_year=selected_year,
-                               report_data=report_data,
-                               year_total=year_total,
-                               last_year_total=last_year_total,
-                               yoy_growth_pct=yoy_growth_pct,
-                               yoy_diff=yoy_diff,
-                               best_month=best_month,
-                               worst_month=worst_month,
-                               avg_monthly=avg_monthly,
-                               nim_pct=nim_pct,
-                               dpd_pct=dpd_pct,
-                               quarters=quarters,
-                               narrative_paragraphs=narrative_paragraphs,
-                               chart_payload=chart_payload)
-    finally:
-        conn.close()
+    return render_template('report.html',
+                           years=years,
+                           selected_year=selected_year,
+                           report_data=report_data,
+                           year_total=year_total,
+                           last_year_total=last_year_total,
+                           yoy_growth_pct=yoy_growth_pct,
+                           yoy_diff=yoy_diff,
+                           best_month=best_month,
+                           worst_month=worst_month,
+                           avg_monthly=avg_monthly,
+                           nim_pct=nim_pct,
+                           dpd_pct=dpd_pct,
+                           quarters=quarters,
+                           narrative_paragraphs=narrative_paragraphs,
+                           chart_payload=chart_payload)
 
 
 @app.route('/export/<int:year>')
@@ -996,73 +1017,69 @@ def export_csv(year):
 @login_required
 def trend():
     user_id = session['user_id']
-    conn = get_db()
-    try:
-        # [초고속 스마트 캐시] monthly_summary 및 요일별 평균 캐시 조회 (0ms 즉시 반환)
-        rows = get_cached_monthly_summary(conn, user_id)
+    # [초고속 스마트 캐시] monthly_summary 및 요일별 평균 캐시 조회 (DB 연결/쿼리 0회, 0ms 즉시 반환)
+    rows = get_cached_monthly_summary(None, user_id)
 
-        years_dict = {}
-        for r in rows:
-            yr = r['year']
-            if yr not in years_dict:
-                years_dict[yr] = [0] * 12
-            years_dict[yr][r['month'] - 1] = int(r['grand_total'])
+    years_dict = {}
+    for r in rows:
+        yr = r['year']
+        if yr not in years_dict:
+            years_dict[yr] = [0] * 12
+        years_dict[yr][r['month'] - 1] = int(r['grand_total'])
 
-        yearly_data = [
-            {'year': yr, 'data': [int(v) for v in data]}
-            for yr, data in sorted(years_dict.items())
-            if any(v > 0 for v in data)
-        ]
+    yearly_data = [
+        {'year': yr, 'data': [int(v) for v in data]}
+        for yr, data in sorted(years_dict.items())
+        if any(v > 0 for v in data)
+    ]
 
-        dow_dict = get_cached_dow_avg(conn, user_id)
-        day_order = ['월', '화', '수', '목', '금', '토']
-        day_of_week_data = {
-            'labels': day_order,
-            'values': [dow_dict.get(d, 0) for d in day_order]
-        }
+    dow_dict = get_cached_dow_avg(None, user_id)
+    day_order = ['월', '화', '수', '목', '금', '토']
+    day_of_week_data = {
+        'labels': day_order,
+        'values': [dow_dict.get(d, 0) for d in day_order]
+    }
 
-        # 중복 쿼리 제거: 이미 조회된 rows의 최근 24개월을 인메모리에서 바로 활용
-        all_months = rows[-24:] if len(rows) > 24 else rows
+    # 중복 쿼리 제거: 이미 조회된 rows의 최근 24개월을 인메모리에서 바로 활용
+    all_months = rows[-24:] if len(rows) > 24 else rows
 
-        growth_labels = []
-        growth_values = []
-        for r in all_months:
-            growth_labels.append(f"{r['year']}.{r['month']:02d}")
-            prev_total = int(r['grand_total']) - int(r['prev_month_diff'] or 0)
-            rate = float(round((int(r['prev_month_diff'] or 0) / prev_total) * 100, 1)) if prev_total > 0 else 0.0
-            growth_values.append(rate)
+    growth_labels = []
+    growth_values = []
+    for r in all_months:
+        growth_labels.append(f"{r['year']}.{r['month']:02d}")
+        prev_total = int(r['grand_total']) - int(r['prev_month_diff'] or 0)
+        rate = float(round((int(r['prev_month_diff'] or 0) / prev_total) * 100, 1)) if prev_total > 0 else 0.0
+        growth_values.append(rate)
 
-        growth_data = {'labels': growth_labels, 'values': growth_values}
+    growth_data = {'labels': growth_labels, 'values': growth_values}
 
-        ratio_data = {
-            'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
-            'dispensing': [int(r['dispensing_plus_daily_total']) for r in rows],
-            'non_insurance': [int(r['non_insurance_total']) for r in rows]
-        }
+    ratio_data = {
+        'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
+        'dispensing': [int(r['dispensing_plus_daily_total']) for r in rows],
+        'non_insurance': [int(r['non_insurance_total']) for r in rows]
+    }
 
-        heatmap_data = []
-        if rows:
-            all_totals = [int(r['grand_total']) for r in rows if r['grand_total'] > 0]
-            min_val = min(all_totals) if all_totals else 0
-            max_val = max(all_totals) if all_totals else 1
+    heatmap_data = []
+    if rows:
+        all_totals = [int(r['grand_total']) for r in rows if r['grand_total'] > 0]
+        min_val = min(all_totals) if all_totals else 0
+        max_val = max(all_totals) if all_totals else 1
 
-            for yr, data in sorted(years_dict.items()):
-                months = []
-                for val in data:
-                    if val > 0 and max_val > min_val:
-                        intensity = (val - min_val) / (max_val - min_val)
-                        r_c = int(220 - intensity * 180)
-                        g_c = int(240 - intensity * 80)
-                        b_c = int(255 - intensity * 60)
-                        color = f'rgb({r_c},{g_c},{b_c})'
-                        text_color = '#fff' if intensity > 0.5 else '#333'
-                    else:
-                        color = '#f8f9fa'
-                        text_color = '#ccc'
-                    months.append({'value': int(val), 'color': color, 'text_color': text_color})
-                heatmap_data.append({'year': yr, 'months': months})
-    finally:
-        conn.close()
+        for yr, data in sorted(years_dict.items()):
+            months = []
+            for val in data:
+                if val > 0 and max_val > min_val:
+                    intensity = (val - min_val) / (max_val - min_val)
+                    r_c = int(220 - intensity * 180)
+                    g_c = int(240 - intensity * 80)
+                    b_c = int(255 - intensity * 60)
+                    color = f'rgb({r_c},{g_c},{b_c})'
+                    text_color = '#fff' if intensity > 0.5 else '#333'
+                else:
+                    color = '#f8f9fa'
+                    text_color = '#ccc'
+                months.append({'value': int(val), 'color': color, 'text_color': text_color})
+            heatmap_data.append({'year': yr, 'months': months})
 
     return render_template('trend.html',
                            yearly_data=yearly_data,
@@ -1599,23 +1616,33 @@ def admin_export_backup():
 
 @app.route('/debug/perf')
 def debug_perf():
-    """서버 및 DB 커넥션 풀 성능 실시간 진단 API"""
+    """서버 및 DB 커넥션 풀 성능 실시간 정밀 진단 API"""
+    from database import get_pg_pool, get_database_url
+    steps = {}
+
     t0 = time.time()
-    conn = get_db()
-    t_conn = time.time() - t0
+    pool = get_pg_pool()
+    steps['get_pg_pool_sec'] = round(time.time() - t0, 3)
 
     t1 = time.time()
+    conn = get_db()
+    steps['get_db_total_sec'] = round(time.time() - t1, 3)
+
+    t2 = time.time()
     cur = conn.execute("SELECT 1")
     cur.fetchall()
-    t_query = time.time() - t1
-    conn.close()
+    steps['query_select1_sec'] = round(time.time() - t2, 3)
 
-    return jsonify({
-        'conn_time_sec': round(t_conn, 3),
-        'query_time_sec': round(t_query, 3),
-        'total_time_sec': round(time.time() - t0, 3),
-        'pool_status': get_pool_status()
-    })
+    t3 = time.time()
+    conn.close()
+    steps['conn_close_sec'] = round(time.time() - t3, 3)
+
+    steps['pool_status'] = get_pool_status()
+    steps['cache_stats'] = {
+        'users_cached': len(_USER_CACHE),
+        'cached_user_keys': {uid: list(data.keys()) for uid, data in _USER_CACHE.items()}
+    }
+    return jsonify(steps)
 
 
 # ==========================================
