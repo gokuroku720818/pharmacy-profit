@@ -251,3 +251,55 @@ function initTrendCharts(yearlyData, dayOfWeekData, growthData) {
         });
     }
 }
+
+function initWeeklyTrendChart(weeklyData) {
+    const weeklyCtx = document.getElementById('weeklyTrendChart');
+    if (!weeklyCtx || !weeklyData) return;
+
+    new Chart(weeklyCtx, {
+        type: 'bar',
+        data: {
+            labels: weeklyData.labels,
+            datasets: [
+                {
+                    label: '조제+일매순익',
+                    data: weeklyData.disp_plus_daily,
+                    backgroundColor: COLORS.primary,
+                    borderRadius: 4
+                },
+                {
+                    label: '비보험약가차액',
+                    data: weeklyData.non_insurance,
+                    backgroundColor: COLORS.success,
+                    borderRadius: 4
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { stacked: true },
+                y: {
+                    stacked: true,
+                    ticks: { callback: v => formatNumber(v) }
+                }
+            },
+            plugins: {
+                legend: { position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.raw.toLocaleString()}원`;
+                        },
+                        footer: function(tooltipItems) {
+                            let total = 0;
+                            tooltipItems.forEach(function(item) { total += item.raw; });
+                            return `주간 총 순익: ${total.toLocaleString()}원`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}

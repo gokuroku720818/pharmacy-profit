@@ -545,6 +545,141 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast, latest_row
     }
 
 
+def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4):
+    """
+    최근 4주간 주차별 순익 현황 및 이번 주 이익 집계 (x월 1~4주차)
+    - 한국 표준 목요일 기준 x월 n주차 명칭 자동 산출
+    - 주차별 조제료, 일매순익, 비보험약가차액, 주간 총 순익, 영업일수, 일평균
+    - 전주 대비 증감액/증감율, 이번 주 진행중 상태 및 동기간 비교
+    """
+    today = datetime.date.today()
+    this_monday = today - datetime.timedelta(days=today.weekday())
+    this_sunday = this_monday + datetime.timedelta(days=6)
+
+    start_date = this_monday - datetime.timedelta(weeks=num_weeks - 1)
+    end_date = this_sunday
+
+    rows = conn.execute('''
+        SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
+        FROM daily_profit
+        WHERE user_id = ? AND date BETWEEN ? AND ?
+        ORDER BY date ASC
+    ''', (user_id, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))).fetchall()
+
+    date_map = {r['date']: r for r in rows}
+
+    weeks = []
+    prev_week_dict = None
+
+    for idx in range(num_weeks - 1, -1, -1):
+        w_monday = this_monday - datetime.timedelta(weeks=idx)
+        w_sunday = w_monday + datetime.timedelta(days=6)
+        w_thursday = w_monday + datetime.timedelta(days=3)
+
+        # 목요일 기준 월 및 주차
+        target_month = w_thursday.month
+        month_first_day = w_thursday.replace(day=1)
+        first_thursday = month_first_day + datetime.timedelta(days=(3 - month_first_day.weekday() + 7) % 7)
+        if w_thursday < first_thursday:
+            prev_month_last = month_first_day - datetime.timedelta(days=1)
+            target_month = prev_month_last.month
+            pm_first = prev_month_last.replace(day=1)
+            pm_first_thu = pm_first + datetime.timedelta(days=(3 - pm_first.weekday() + 7) % 7)
+            week_num = (w_thursday - pm_first_thu).days // 7 + 1
+        else:
+            week_num = (w_thursday - first_thursday).days // 7 + 1
+
+        week_label = f"{target_month}월 {week_num}주차"
+
+        disp_sum = 0
+        daily_sum = 0
+        nim_sum = 0
+        tot_sum = 0
+        entered_days = 0
+
+        cur_d = w_monday
+        while cur_d <= w_sunday:
+            d_str = cur_d.strftime('%Y-%m-%d')
+            if d_str in date_map:
+                r = date_map[d_str]
+                t = int(r['total'] or 0)
+                disp = int(r['dispensing_fee'] or 0)
+                daily = int(r['daily_net_profit'] or 0)
+                nim = int(r['non_insurance_margin'] or 0)
+                disp_sum += disp
+                daily_sum += daily
+                nim_sum += nim
+                tot_sum += t
+                if t > 0 or disp > 0:
+                    entered_days += 1
+            cur_d += datetime.timedelta(days=1)
+
+        daily_avg = int(tot_sum / entered_days) if entered_days > 0 else 0
+
+        is_current = (idx == 0)
+
+        diff = None
+        growth_pct = None
+        if prev_week_dict is not None and prev_week_dict['total_sum'] > 0:
+            diff = tot_sum - prev_week_dict['total_sum']
+            growth_pct = float(round((diff / float(prev_week_dict['total_sum'])) * 100, 1))
+
+        week_info = {
+            'week_label': week_label,
+            'start_date': w_monday.strftime('%m.%d'),
+            'end_date': w_sunday.strftime('%m.%d'),
+            'date_range': f"{w_monday.strftime('%m.%d')} ~ {w_sunday.strftime('%m.%d')}",
+            'is_current': is_current,
+            'dispensing_sum': disp_sum,
+            'daily_sum': daily_sum,
+            'disp_plus_daily': disp_sum + daily_sum,
+            'nim_sum': nim_sum,
+            'total_sum': tot_sum,
+            'entered_days': entered_days,
+            'daily_avg': daily_avg,
+            'diff': diff,
+            'growth_pct': growth_pct
+        }
+
+        weeks.append(week_info)
+        prev_week_dict = week_info
+
+    this_week = weeks[-1] if weeks else None
+
+    # 이번 주와 지난주 동기간(월요일~오늘 요일) 직접 비교 계산
+    if this_week and len(weeks) >= 2:
+        last_week = weeks[-2]
+        days_passed = today.weekday() + 1
+        lw_monday = this_monday - datetime.timedelta(weeks=1)
+        lw_same_period_sum = 0
+        for d_off in range(days_passed):
+            target_d = (lw_monday + datetime.timedelta(days=d_off)).strftime('%Y-%m-%d')
+            if target_d in date_map:
+                lw_same_period_sum += int(date_map[target_d]['total'] or 0)
+
+        this_week['last_week_same_period'] = lw_same_period_sum
+        if lw_same_period_sum > 0:
+            s_diff = this_week['total_sum'] - lw_same_period_sum
+            this_week['same_period_diff'] = s_diff
+            this_week['same_period_pct'] = float(round((s_diff / float(lw_same_period_sum)) * 100, 1))
+        else:
+            this_week['same_period_diff'] = None
+            this_week['same_period_pct'] = None
+
+    chart_data = {
+        'labels': [w['week_label'] for w in weeks],
+        'totals': [w['total_sum'] for w in weeks],
+        'disp_plus_daily': [w['disp_plus_daily'] for w in weeks],
+        'non_insurance': [w['nim_sum'] for w in weeks]
+    }
+
+    return {
+        'weeks': weeks,
+        'this_week': this_week,
+        'chart_data': chart_data
+    }
+
+
 # ==========================================
 # 🔑 인증 라우트 (회원가입, 로그인, 로그아웃)
 # ==========================================
@@ -720,6 +855,7 @@ def dashboard():
                                                month_summary_row=rows[-1] if rows else None)
         narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast,
                                                        latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows)
+        weekly_stats = get_recent_weeks_profit_stats(conn, user_id)
 
         dashboard_ctx = {
             'current_month': current_month,
@@ -729,7 +865,8 @@ def dashboard():
             'forecast': forecast,
             'yoy_day': yoy_day,
             'balance': balance,
-            'narrative_briefing': narrative_briefing
+            'narrative_briefing': narrative_briefing,
+            'weekly_stats': weekly_stats
         }
 
         # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
