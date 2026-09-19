@@ -227,3 +227,77 @@ def test_summary_only_does_not_claim_daily_amounts_are_excluded(service, conn):
     text = client.get('/calendar?year=2026&month=8').get_data(as_text=True)
     assert '합계와 예측에 보충하지 않았습니다' not in text
     assert '일별 세부 자료 없음' in text
+
+
+def test_dashboard_query_budget_and_fresh_values(service, conn, monkeypatch):
+    for day in ('2025-09-20', '2026-08-19', '2026-09-12', '2026-09-19'):
+        add(conn, day)
+    service.recalc_monthly_summary(conn, 1, 2026, 9)
+    statements = []
+    original = service.get_db
+    def tracked():
+        c = original()
+        c.set_trace_callback(lambda sql: statements.append(sql) if sql.lstrip().upper().startswith('SELECT') else None)
+        return c
+    monkeypatch.setattr(service, 'get_db', tracked)
+    client = client_for(service)
+    response = client.get('/')
+    assert response.status_code == 200
+    assert len(statements) <= 3, statements
+    statements.clear()
+    conn.execute("UPDATE daily_profit SET total=99999 WHERE user_id=1 AND date='2026-09-19'")
+    conn.commit()
+    response = client.get('/')
+    assert '99,999' in response.get_data(as_text=True)
+    assert len(statements) <= 2, statements
+
+
+def test_login_needs_no_external_render_dependencies(service):
+    html = service.app.test_client().get('/login').get_data(as_text=True)
+    assert 'https://cdn' not in html
+    assert 'autocomplete="current-password"' in html
+
+
+def test_non_chart_page_does_not_download_chart_library(service):
+    html = client_for(service).get('/input').get_data(as_text=True)
+    assert 'chart.umd.min.js' not in html
+
+
+def test_snapshot_forecast_matches_direct_query_for_past_and_future(service, conn):
+    for day in ('2025-01-02', '2025-02-03', '2026-08-31', '2026-09-19', '2026-12-01'):
+        add(conn, day)
+    for year, month in ((2025, 2), (2026, 9), (2026, 12)):
+        snapshot = service.load_analysis_rows(conn, 1, year, month)
+        assert service.get_month_forecast(conn, 1, year, month, history_rows=snapshot) == service.get_month_forecast(conn, 1, year, month)
+
+
+def test_calendar_uses_one_connection(service, conn, monkeypatch):
+    add(conn, '2026-09-19')
+    service.recalc_monthly_summary(conn, 1, 2026, 9)
+    calls = []
+    original = service.get_db
+    def tracked():
+        calls.append(1)
+        return original()
+    monkeypatch.setattr(service, 'get_db', tracked)
+    import profit_analysis
+    monkeypatch.setattr(profit_analysis, 'get_db', tracked)
+    assert client_for(service).get('/calendar?year=2026&month=9').status_code == 200
+    assert len(calls) == 1
+
+
+def test_login_success_and_failure_with_synthetic_credentials(service, conn):
+    from werkzeug.security import generate_password_hash
+    conn.execute('UPDATE users SET username=?, password_hash=? WHERE id=1',
+                 ('speed-test-user', generate_password_hash('synthetic-test-password')))
+    conn.commit()
+    client = service.app.test_client()
+    rejected = client.post('/login', data={'username': 'speed-test-user', 'password': 'wrong'})
+    assert rejected.status_code == 200
+    with client.session_transaction() as session:
+        assert 'user_id' not in session
+    accepted = client.post('/login', data={'username': 'speed-test-user', 'password': 'synthetic-test-password'})
+    assert accepted.status_code == 302
+    with client.session_transaction() as session:
+        assert session['user_id'] == 1
+    assert client.get('/').status_code == 200

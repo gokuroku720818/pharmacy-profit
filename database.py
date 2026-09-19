@@ -3,6 +3,7 @@ import os
 import re
 import threading
 import time
+import weakref
 from werkzeug.security import generate_password_hash
 
 try:
@@ -16,6 +17,8 @@ except ImportError:
 _pg_pool = None
 _pg_pool_lock = threading.Lock()
 _pool_error = None
+_pg_last_used = weakref.WeakKeyDictionary()
+_pg_usage_lock = threading.Lock()
 
 
 def get_pg_pool():
@@ -27,7 +30,7 @@ def get_pg_pool():
                 db_url = get_database_url()
                 if db_url:
                     try:
-                        _pg_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url, cursor_factory=RealDictCursor)
+                        _pg_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url, cursor_factory=RealDictCursor, connect_timeout=10)
                         _pool_error = None
                         print("⚡ PostgreSQL 커넥션 풀 활성화 완료 (고속 재사용 모드)")
                     except Exception as e:
@@ -78,19 +81,21 @@ class PostgresConnectionWrapper:
             return
         self._closed = True
         if self.from_pool:
-            # 풀에 반납하기 전에 미완료 트랜잭션을 롤백하여 dirty 상태 방지
-            try:
-                self.conn.rollback()
-            except Exception:
-                pass
             pool = get_pg_pool()
             if pool:
-                pool.putconn(self.conn)
+                discard = bool(self.conn.closed)
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    discard = True
+                with _pg_usage_lock:
+                    if discard:
+                        _pg_last_used.pop(self.conn, None)
+                    else:
+                        _pg_last_used[self.conn] = time.monotonic()
+                pool.putconn(self.conn, close=discard)
                 return
-        try:
-            self.conn.close()
-        except Exception:
-            pass
+        self.conn.close()
 
 
 def get_db():
@@ -99,39 +104,32 @@ def get_db():
     if db_url and psycopg2:
         pool = get_pg_pool()
         if pool:
-            try:
-                pg_conn = pool.getconn()
-            except Exception:
-                # 풀 고갈 시 직접 연결로 폴백
-                pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-                return PostgresConnectionWrapper(pg_conn, from_pool=False)
-            
-            # 스마트 유휴 커넥션 헬스 체크: 60초 이상 유휴 상태일 때만 SELECT 1 핑 실행 (평상시 200ms 지연 제거!)
-            now_ts = time.time()
-            last_checked = getattr(pg_conn, '_last_checked_ts', 0)
-            if now_ts - last_checked > 60:
+            # psycopg2 connections do not accept custom Python attributes.
+            # Retry one stale connection; never leave a checked-out connection behind.
+            for _ in range(2):
                 try:
-                    pg_conn.cursor().execute("SELECT 1")
-                    pg_conn.rollback()  # 헬스 체크 트랜잭션 정리
-                    pg_conn._last_checked_ts = now_ts
+                    pg_conn = pool.getconn()
+                except psycopg2.pool.PoolError:
+                    break
+                try:
+                    with _pg_usage_lock:
+                        last_used = _pg_last_used.get(pg_conn)
+                    if pg_conn.closed:
+                        raise psycopg2.InterfaceError("Closed pooled connection")
+                    if last_used is None or time.monotonic() - last_used > 60:
+                        cursor = pg_conn.cursor()
+                        try:
+                            cursor.execute("SELECT 1")
+                        finally:
+                            cursor.close()
+                        pg_conn.rollback()
+                    return PostgresConnectionWrapper(pg_conn, from_pool=True)
                 except Exception:
-                    try:
-                        pool.putconn(pg_conn, close=True)
-                    except Exception:
-                        pass
-                    try:
-                        pg_conn = pool.getconn()
-                        pg_conn._last_checked_ts = now_ts
-                    except Exception:
-                        pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-                        return PostgresConnectionWrapper(pg_conn, from_pool=False)
-            else:
-                pg_conn._last_checked_ts = now_ts
-
-            return PostgresConnectionWrapper(pg_conn, from_pool=True)
-        else:
-            pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-            return PostgresConnectionWrapper(pg_conn, from_pool=False)
+                    with _pg_usage_lock:
+                        _pg_last_used.pop(pg_conn, None)
+                    pool.putconn(pg_conn, close=True)
+        pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor, connect_timeout=10)
+        return PostgresConnectionWrapper(pg_conn, from_pool=False)
     else:
         os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
         conn = sqlite3.connect(SQLITE_PATH)
@@ -299,7 +297,7 @@ def init_sqlite_db():
             INSERT INTO users (username, password_hash, pharmacy_name)
             VALUES (?, ?, ?)
         ''', ('admin', default_hash, '우리약국'))
-        print("기본 계정 생성 완료: 아이디=admin, 비번=7581")
+        print("기본 계정 생성 완료")
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_profit (

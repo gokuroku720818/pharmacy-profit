@@ -252,26 +252,41 @@ def get_latest_month_summary(user_id, conn=None):
     return {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'grand_total': 0, 'diff': 0}
 
 
-def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4):
+def load_analysis_rows(conn, user_id, year, month):
+    """One user-scoped snapshot for forecast, comparisons and weekly totals."""
+    today = korea_today()
+    start = datetime.date(year, month, 1) - datetime.timedelta(days=364)
+    end = datetime.date(year, month, calendar.monthrange(year, month)[1])
+    recent_start = today - datetime.timedelta(days=55)
+    recent_end = today + datetime.timedelta(days=6 - today.weekday())
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM daily_profit WHERE user_id = ? AND "
+        "(date BETWEEN ? AND ? OR date BETWEEN ? AND ?) ORDER BY date",
+        (user_id, start.isoformat(), end.isoformat(), recent_start.isoformat(), recent_end.isoformat())
+    ).fetchall()]
+
+
+def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
     """
     최근 4주간 주차별 순익 현황 및 이번 주 이익 집계 (x월 1~4주차)
     - 한국 표준 목요일 기준 x월 n주차 명칭 자동 산출
     - 주차별 조제료, 일매순익, 비보험약가차액, 주간 총 순익, 영업일수, 일평균
     - 전주 대비 증감액/증감율, 이번 주 진행중 상태 및 동기간 비교
     """
-    today = datetime.date.today()
+    today = korea_today()
     this_monday = today - datetime.timedelta(days=today.weekday())
     this_sunday = this_monday + datetime.timedelta(days=6)
 
     start_date = this_monday - datetime.timedelta(weeks=num_weeks - 1)
     end_date = this_sunday
 
-    rows = conn.execute('''
-        SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
-        FROM daily_profit
-        WHERE user_id = ? AND date BETWEEN ? AND ?
-        ORDER BY date ASC
-    ''', (user_id, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))).fetchall()
+    if rows is None:
+        rows = conn.execute('''
+            SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
+            FROM daily_profit
+            WHERE user_id = ? AND date BETWEEN ? AND ?
+            ORDER BY date ASC
+        ''', (user_id, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))).fetchall()
 
     date_map = {r['date']: r for r in rows}
 
@@ -533,7 +548,9 @@ def dashboard():
         # [초고속 스마트 캐시 2] 당월 daily_profit 데이터 캐시 조회 (캐시 히트 시 DB 0ms)
         cur_year = current_month['year']
         cur_month = current_month['month']
-        cur_month_rows = get_cached_current_month_dailies(conn, user_id, cur_year, cur_month)
+        analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
+        cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
+        schedule = get_business_schedule(conn, user_id)
 
         # [초고속 스마트 캐시 3] 요일별 평균 캐시 조회 (캐시 히트 시 DB 0ms)
         dow_avg = None
@@ -559,14 +576,18 @@ def dashboard():
 
         # 헬퍼 호출 (사전 로딩 데이터 활용으로 DB 쿼리 최소화)
         forecast = get_month_forecast(conn, user_id, cur_year, cur_month,
-                                      entered_rows=cur_month_rows, dow_avg=dow_avg, last_year_total=last_year_total)
-        yoy_day = get_yoy_day_comparison(conn, user_id, today_row=latest_row)
+                                      entered_rows=cur_month_rows, dow_avg=dow_avg, last_year_total=last_year_total,
+                                      schedule=schedule, history_rows=analysis_rows,
+                                      month_summary_row=rows[-1] if rows else {})
+        # A summary-only selected month may fall back to a much older daily row.
+        comparison_rows = analysis_rows if latest_row and latest_row in cur_month_rows else None
+        yoy_day = get_yoy_day_comparison(conn, user_id, today_row=latest_row, comparison_rows=comparison_rows)
         balance = get_profit_balance_diagnosis(conn, user_id, cur_year, cur_month,
                                                entered_rows=cur_month_rows,
-                                               month_summary_row=rows[-1] if rows else None)
+                                               month_summary_row=rows[-1] if rows else {})
         narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast,
-                                                       latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows)
-        weekly_stats = get_recent_weeks_profit_stats(conn, user_id)
+                                                       latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows, comparison_rows=comparison_rows)
+        weekly_stats = get_recent_weeks_profit_stats(conn, user_id, rows=analysis_rows)
 
         dashboard_ctx = {
             'current_month': current_month,
@@ -585,7 +606,6 @@ def dashboard():
         with _CACHE_LOCK:
             if user_id not in _USER_CACHE:
                 _USER_CACHE[user_id] = {}
-            _USER_CACHE[user_id]['dashboard_ctx'] = {'ts': now, 'ctx': dashboard_ctx}
             _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
     finally:
         conn.close()
@@ -715,62 +735,52 @@ def save_business_schedule():
 @login_required
 def calendar_view():
     user_id = session['user_id']
-    # [초고속 스마트 캐시 1] 월별 요약 캐시에서 연도 목록 및 최신 월 도출 (DB 연결/쿼리 0회, 0ms)
-    m_rows = get_cached_monthly_summary(None, user_id)
-    years = sorted(list(set(int(r['year']) for r in m_rows)), reverse=True)
-
-    if m_rows:
-        last_m = m_rows[-1]
-        default_year = int(last_m['year'])
-        default_month = int(last_m['month'])
-    else:
-        today_dt = datetime.date.today()
-        default_year, default_month = today_dt.year, today_dt.month
-
-    year = request.args.get('year', default_year, type=int)
-    month = request.args.get('month', default_month, type=int)
-    if not 2 <= year <= 9998 or not 1 <= month <= 12:
-        return '올바른 연월을 입력해 주세요.', 400
-
-    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
-    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
-
-    # [초고속 스마트 캐시 2] 당월 데이터는 캐시에서 0ms 반환 (과거 타 월 조회 시에만 get_db 호출)
-    today_now = datetime.date.today()
-    if year == today_now.year and month == today_now.month:
-        rows = get_cached_current_month_dailies(None, user_id, year, month)
-    else:
-        conn = get_db()
-        try:
-            date_prefix = f"{year}-{month:02d}"
-            rows_raw = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date LIKE ?', (user_id, date_prefix + '%')).fetchall()
-            rows = [dict(r) for r in rows_raw]
-        finally:
-            conn.close()
-
-    profit_by_day = {}
-    for r in rows:
-        d_num = int(r['date'].split('-')[2])
-        profit_by_day[d_num] = r
-
-    calendar.setfirstweekday(calendar.SUNDAY)
-    cal_weeks = calendar.monthcalendar(year, month)
-
-    # 당월 월별 요약 (인메모리 캐시에서 즉시 추출, 쿼리 0회)
-    month_summary = next((r for r in m_rows if int(r['year']) == year and int(r['month']) == month), None)
-
-    total_days_worked = len(rows)
-    avg_daily = int(month_summary['grand_total']) // total_days_worked if (month_summary and total_days_worked > 0) else 0
-
-    dow_avg = None
-    last_year_total = next((int(r['grand_total']) for r in m_rows if int(r['year']) == year - 1 and int(r['month']) == month), 0)
-
-    # 사전 로딩 인자 주입으로 DB 쿼리 0회 즉시 예측 계산
-    forecast = get_month_forecast(None, user_id, year, month, entered_rows=rows, dow_avg=dow_avg, last_year_total=last_year_total)
-
     conn = get_db()
     try:
+        # [초고속 스마트 캐시 1] 월별 요약 캐시에서 연도 목록 및 최신 월 도출 (DB 연결/쿼리 0회, 0ms)
+        m_rows = get_cached_monthly_summary(conn, user_id)
+        years = sorted(list(set(int(r['year']) for r in m_rows)), reverse=True)
+
+        if m_rows:
+            last_m = m_rows[-1]
+            default_year = int(last_m['year'])
+            default_month = int(last_m['month'])
+        else:
+            today_dt = datetime.date.today()
+            default_year, default_month = today_dt.year, today_dt.month
+
+        year = request.args.get('year', default_year, type=int)
+        month = request.args.get('month', default_month, type=int)
+        if not 2 <= year <= 9998 or not 1 <= month <= 12:
+            return '올바른 연월을 입력해 주세요.', 400
+
+        prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+        next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+        analysis_rows = load_analysis_rows(conn, user_id, year, month)
+        rows = [r for r in analysis_rows if r['date'].startswith(f'{year:04d}-{month:02d}-')]
+
+        profit_by_day = {}
+        for r in rows:
+            d_num = int(r['date'].split('-')[2])
+            profit_by_day[d_num] = r
+
+        cal_weeks = calendar.Calendar(firstweekday=calendar.SUNDAY).monthdayscalendar(year, month)
+
+        # 당월 월별 요약 (인메모리 캐시에서 즉시 추출, 쿼리 0회)
+        month_summary = next((r for r in m_rows if int(r['year']) == year and int(r['month']) == month), None)
+
+        total_days_worked = len(rows)
+        avg_daily = int(month_summary['grand_total']) // total_days_worked if (month_summary and total_days_worked > 0) else 0
+
+        dow_avg = None
+        last_year_total = next((int(r['grand_total']) for r in m_rows if int(r['year']) == year - 1 and int(r['month']) == month), 0)
+
         business_schedule = get_business_schedule(conn, user_id)
+        forecast = get_month_forecast(conn, user_id, year, month, entered_rows=rows,
+            last_year_total=last_year_total, schedule=business_schedule,
+            history_rows=analysis_rows, month_summary_row=month_summary or {})
+
     finally:
         conn.close()
     session.setdefault('schedule_csrf', secrets.token_urlsafe(32))

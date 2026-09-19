@@ -29,7 +29,7 @@ def is_business_day(day, schedule):
 
 
 def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=None,
-                       last_year_total=None, as_of=None, schedule=None):
+                       last_year_total=None, as_of=None, schedule=None, history_rows=None, month_summary_row=None):
     """Eight-week weekday scenarios, with past gaps explicitly excluded.
 
     low/high are observed weekday minima/maxima, NOT confidence intervals.
@@ -46,7 +46,8 @@ def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=No
         history_start = cutoff - dt.timedelta(days=55)
         history = conn.execute('''SELECT date, total FROM daily_profit
             WHERE user_id = ? AND date BETWEEN ? AND ? ORDER BY date''',
-            (user_id, history_start.isoformat(), cutoff.isoformat())).fetchall()
+            (user_id, history_start.isoformat(), cutoff.isoformat())).fetchall() if history_rows is None else [
+                r for r in history_rows if history_start.isoformat() <= r['date'] <= cutoff.isoformat()]
         schedule = schedule if schedule is not None else get_business_schedule(conn, user_id)
         if entered_rows is None:
             entered_rows = conn.execute('''SELECT date,total FROM daily_profit
@@ -82,8 +83,8 @@ def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=No
                         sums[key] += item[key]
         current = sum(observed.values())
         summary = conn.execute('SELECT grand_total FROM monthly_summary WHERE user_id = ? AND year = ? AND month = ?',
-                               (user_id, year, month)).fetchone()
-        summary_only = not observed and not future_count and summary is not None
+                               (user_id, year, month)).fetchone() if month_summary_row is None else month_summary_row
+        summary_only = not observed and not future_count and bool(summary)
         if summary_only:
             current = int(summary['grand_total'] or 0)
             missing = []  # Daily detail is unavailable; the monthly total may already include it.
@@ -117,7 +118,7 @@ def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=No
             conn.close()
 
 
-def get_yoy_day_comparison(conn, user_id, date_str=None, today_row=None):
+def get_yoy_day_comparison(conn, user_id, date_str=None, today_row=None, comparison_rows=None):
     if today_row is None:
         if date_str:
             today_row = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date = ?',
@@ -130,7 +131,8 @@ def get_yoy_day_comparison(conn, user_id, date_str=None, today_row=None):
     date = dt.date.fromisoformat(today_row['date'])
     previous_date = (date - dt.timedelta(days=364)).isoformat()
     previous = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date = ?',
-                            (user_id, previous_date)).fetchone()
+                            (user_id, previous_date)).fetchone() if comparison_rows is None else next(
+                                (r for r in comparison_rows if r['date'] == previous_date), None)
     value = int(today_row['total'] or 0)
     old = int(previous['total'] or 0) if previous else None
     return {'current_date': date.isoformat(), 'current_dow': DAY_NAMES[date.weekday()],
@@ -190,7 +192,7 @@ def compare_periods(current, previous):
 
 
 def get_ai_narrative_briefing(conn, user_id, current_month, forecast, latest_row=None,
-                              cur_cum=None, cur_month_rows=None):
+                              cur_cum=None, cur_month_rows=None, comparison_rows=None):
     if latest_row is None:
         latest_row = conn.execute('''SELECT * FROM daily_profit WHERE user_id = ? AND date <= ?
             ORDER BY date DESC LIMIT 1''', (user_id, korea_today().isoformat())).fetchone()
@@ -206,12 +208,14 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast, latest_row
                                       (user_id, start.isoformat(), day.isoformat())).fetchall()
     current = [r for r in cur_month_rows if start.isoformat() <= r['date'] <= day.isoformat()]
     previous = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date BETWEEN ? AND ?',
-                            (user_id, previous_start.isoformat(), previous_end.isoformat())).fetchall()
+                            (user_id, previous_start.isoformat(), previous_end.isoformat())).fetchall() if comparison_rows is None else [
+                                r for r in comparison_rows if previous_start.isoformat() <= r['date'] <= previous_end.isoformat()]
     comparison = compare_periods(current, previous)
     total = int(latest_row['total'] or 0)
     paragraphs = [f"최근 입력일 {day.isoformat()} ({DAY_NAMES[day.weekday()]})의 합계는 <strong>{total:,}원</strong>입니다."]
     week_row = conn.execute('SELECT total FROM daily_profit WHERE user_id = ? AND date = ?',
-                            (user_id, (day-dt.timedelta(days=7)).isoformat())).fetchone()
+                            (user_id, (day-dt.timedelta(days=7)).isoformat())).fetchone() if comparison_rows is None else next(
+                                (r for r in comparison_rows if r['date'] == (day-dt.timedelta(days=7)).isoformat()), None)
     if week_row:
         change = total-int(week_row['total'] or 0)
         direction = '증가' if change > 0 else '감소' if change < 0 else '동일'
