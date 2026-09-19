@@ -681,6 +681,17 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4):
 
 
 # ==========================================
+# ⚡ 킵얼라이브(Keep-Alive) 찌르기 전용 초경량 엔드포인트
+# ==========================================
+
+@app.route('/ping')
+@app.route('/health')
+def ping():
+    """cron-job.org / UptimeRobot 찌르기 전용 초경량 엔드포인트 (출력 크기 2바이트: output too large 에러 영구 방지)"""
+    return 'ok', 200, {'Content-Type': 'text/plain'}
+
+
+# ==========================================
 # 🔑 인증 라우트 (회원가입, 로그인, 로그아웃)
 # ==========================================
 
