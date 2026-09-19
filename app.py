@@ -4,7 +4,11 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import get_db, init_db, recalc_monthly_summary, get_all_users_stats, delete_user_and_data, get_pool_status
+from profit_analysis import (get_month_forecast, get_yoy_day_comparison,
+    get_profit_balance_diagnosis, get_ai_narrative_briefing, generate_annual_narrative_report,
+    get_business_schedule, korea_today)
 from functools import wraps
+import secrets
 import datetime
 import calendar
 import json
@@ -248,303 +252,6 @@ def get_latest_month_summary(user_id, conn=None):
     return {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'grand_total': 0, 'diff': 0}
 
 
-def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=None, last_year_total=None):
-    """1. 이번 달 최종 순익 자동 예측기 (사전 로딩 데이터 지원으로 쿼리 0~1회 최소화)"""
-    date_prefix = f"{year}-{month:02d}"
-
-    if entered_rows is None:
-        entered_rows = conn.execute(
-            'SELECT date, day_of_week, total FROM daily_profit WHERE user_id = ? AND date LIKE ?',
-            (user_id, date_prefix + '%')
-        ).fetchall()
-
-    current_total = sum(int(r['total'] or 0) for r in entered_rows)
-    entered_days = set(int(r['date'].split('-')[2]) for r in entered_rows)
-
-    if dow_avg is None:
-        dow_rows = conn.execute(
-            'SELECT day_of_week, AVG(total) as avg_total FROM daily_profit WHERE user_id = ? AND total > 0 GROUP BY day_of_week',
-            (user_id,)
-        ).fetchall()
-        dow_avg = {r['day_of_week']: int(r['avg_total'] or 0) for r in dow_rows}
-
-    max_days = calendar.monthrange(year, month)[1]
-    day_names = ['월', '화', '수', '목', '금', '토', '일']
-
-    expected_additional = 0
-    remaining_business_days = 0
-
-    for day in range(1, max_days + 1):
-        if day not in entered_days:
-            try:
-                dt = datetime.date(year, month, day)
-                dow = day_names[dt.weekday()]
-                if dow != '일':
-                    avg_val = dow_avg.get(dow, 0)
-                    expected_additional += avg_val
-                    remaining_business_days += 1
-            except ValueError:
-                pass
-
-    forecast_total = current_total + expected_additional
-
-    if last_year_total is None:
-        prev_year_summary = conn.execute(
-            'SELECT grand_total FROM monthly_summary WHERE user_id = ? AND year = ? AND month = ?',
-            (user_id, year - 1, month)
-        ).fetchone()
-        last_year_total = int(prev_year_summary['grand_total'] or 0) if prev_year_summary else 0
-
-    yoy_growth_pct = float(round(((forecast_total - last_year_total) / float(last_year_total) * 100), 1)) if last_year_total > 0 else 0.0
-
-    return {
-        'year': year,
-        'month': month,
-        'current_total': current_total,
-        'entered_count': len(entered_rows),
-        'remaining_business_days': remaining_business_days,
-        'expected_additional': expected_additional,
-        'forecast_total': forecast_total,
-        'last_year_total': last_year_total,
-        'yoy_growth_pct': yoy_growth_pct
-    }
-
-
-def get_yoy_day_comparison(conn, user_id, date_str=None, today_row=None):
-    """2. 작년 오늘 vs 올해 오늘 1:1 맞춤 비교 (사전 로딩 데이터 지원)"""
-    if today_row is None:
-        if not date_str:
-            latest = conn.execute('SELECT date FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 1', (user_id,)).fetchone()
-            if not latest:
-                return None
-            date_str = latest['date']
-
-        today_row = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date = ?', (user_id, date_str)).fetchone()
-        if not today_row:
-            return None
-    else:
-        date_str = today_row['date']
-
-    target_dt = datetime.date.fromisoformat(date_str)
-    yoy_dt = target_dt - datetime.timedelta(days=364)
-    yoy_date_str = yoy_dt.isoformat()
-
-    yoy_row = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date = ?', (user_id, yoy_date_str)).fetchone()
-
-    if not yoy_row:
-        yoy_row = conn.execute(
-            'SELECT * FROM daily_profit WHERE user_id = ? AND date LIKE ? AND day_of_week = ? ORDER BY date LIMIT 1',
-            (user_id, f"{target_dt.year - 1}-{target_dt.month:02d}%", today_row['day_of_week'])
-        ).fetchone()
-
-    last_year_total = int(yoy_row['total'] or 0) if yoy_row else 0
-    last_year_date = yoy_row['date'] if yoy_row else yoy_date_str
-
-    diff = int(today_row['total'] or 0) - last_year_total
-    growth_pct = float(round((diff / float(last_year_total) * 100), 1)) if last_year_total > 0 else 0.0
-
-    return {
-        'current_date': date_str,
-        'current_dow': today_row['day_of_week'],
-        'current_total': int(today_row['total'] or 0),
-        'current_dispensing': int(today_row['dispensing_fee'] or 0),
-        'current_daily': int(today_row['daily_net_profit'] or 0),
-        'current_non_insurance': int(today_row['non_insurance_margin'] or 0),
-        'yoy_date': last_year_date,
-        'yoy_total': last_year_total,
-        'diff': diff,
-        'growth_pct': growth_pct
-    }
-
-
-def get_profit_balance_diagnosis(conn, user_id, year, month, entered_rows=None, month_summary_row=None):
-    """3. 순익 황금비율 진단 (사전 로딩 데이터 활용 시 쿼리 0회)"""
-    if entered_rows is not None and len(entered_rows) > 0:
-        disp = sum(int(r['dispensing_fee'] or 0) for r in entered_rows)
-        daily = sum(int(r['daily_net_profit'] or 0) for r in entered_rows)
-        nim = sum(int(r['non_insurance_margin'] or 0) for r in entered_rows)
-        total = sum(int(r['total'] or 0) for r in entered_rows)
-    else:
-        date_prefix = f"{year}-{month:02d}"
-        row = conn.execute('''
-            SELECT 
-                COALESCE(SUM(dispensing_fee), 0) as disp,
-                COALESCE(SUM(daily_net_profit), 0) as daily,
-                COALESCE(SUM(non_insurance_margin), 0) as nim,
-                COALESCE(SUM(total), 0) as total
-            FROM daily_profit WHERE user_id = ? AND date LIKE ?
-        ''', (user_id, date_prefix + '%')).fetchone()
-
-        total = int(row['total'] or 0)
-        disp = int(row['disp'] or 0)
-        daily = int(row['daily'] or 0)
-        nim = int(row['nim'] or 0)
-
-    if total == 0:
-        s_row = month_summary_row or conn.execute('SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? AND month = ?', (user_id, year, month)).fetchone()
-        if s_row and s_row['grand_total'] > 0:
-            total = int(s_row['grand_total'] or 0)
-            nim = int(s_row['non_insurance_total'] or 0)
-            dpd = int(s_row['dispensing_plus_daily_total'] or 0)
-            disp = int(dpd * 0.6)
-            daily = dpd - disp
-
-    if total > 0:
-        disp_pct = float(round((disp / total) * 100, 1))
-        daily_pct = float(round((daily / total) * 100, 1))
-        nim_pct = float(round((nim / total) * 100, 1))
-    else:
-        disp_pct, daily_pct, nim_pct = 0.0, 0.0, 0.0
-
-    if disp_pct >= 75:
-        status = "warning"
-        status_text = "조제 편중 주의"
-        comment = "조제료 의존도가 높습니다. 일반약 및 영양제 매약 상담을 보강하면 처방 변동 리스크를 방어할 수 있습니다."
-    elif daily_pct >= 25 and nim_pct >= 10:
-        status = "success"
-        status_text = "최상의 황금 비율"
-        comment = "조제, 매약, 비급여 마진이 이상적인 삼각 균형을 이루고 있어 약국 수익성이 매우 탄탄합니다."
-    elif daily_pct >= 20:
-        status = "primary"
-        status_text = "안정적 포트폴리오"
-        comment = "일반 매약 비중이 안정적이며 양호한 수익 밸런스를 유지하고 있습니다."
-    else:
-        status = "info"
-        status_text = "표준 조제형 약국"
-        comment = "처방 조제 중심 구조입니다. 비보험·비급여 품목군 마진율 개선을 점검해 보세요."
-
-    return {
-        'disp_val': disp,
-        'daily_val': daily,
-        'nim_val': nim,
-        'total': total,
-        'disp_pct': disp_pct,
-        'daily_pct': daily_pct,
-        'nim_pct': nim_pct,
-        'status': status,
-        'status_text': status_text,
-        'comment': comment
-    }
-
-
-def get_ai_narrative_briefing(conn, user_id, current_month, forecast, latest_row=None, cur_cum=None, cur_month_rows=None):
-    """대시보드: 시적이고 감성적인 AI 경영 브리핑 리포트 생성 (고속 인메모리 연계)"""
-    if latest_row is None:
-        latest_row = conn.execute(
-            'SELECT * FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 1',
-            (user_id,)
-        ).fetchone()
-
-    if not latest_row:
-        return None
-
-    dt = datetime.date.fromisoformat(latest_row['date'])
-    dow = latest_row['day_of_week']
-    today_total = int(latest_row['total'] or 0)
-    disp = int(latest_row['dispensing_fee'] or 0)
-    daily = int(latest_row['daily_net_profit'] or 0)
-    nim = int(latest_row['non_insurance_margin'] or 0)
-
-    # 1. 지난주 같은 요일 비교 (7일 전) - 당월 일별 데이터에서 우선 인메모리 탐색 (쿼리 0회)
-    prev_week_date = (dt - datetime.timedelta(days=7)).isoformat()
-    pw_row = None
-    if cur_month_rows:
-        for r in cur_month_rows:
-            if r['date'] == prev_week_date:
-                pw_row = r
-                break
-    if pw_row is None:
-        pw_row = conn.execute(
-            'SELECT total FROM daily_profit WHERE user_id = ? AND date = ?',
-            (user_id, prev_week_date)
-        ).fetchone()
-
-    # 2. 이번 달 누적 (인메모리 계산값 우선 활용)
-    if cur_cum is None:
-        if cur_month_rows:
-            cur_cum = sum(int(r['total'] or 0) for r in cur_month_rows if r['date'] <= latest_row['date'])
-        else:
-            cur_month_prefix = f"{dt.year}-{dt.month:02d}"
-            cur_cum_row = conn.execute(
-                'SELECT COALESCE(SUM(total), 0) as cum FROM daily_profit WHERE user_id = ? AND date >= ? AND date <= ?',
-                (user_id, f"{cur_month_prefix}-01", latest_row['date'])
-            ).fetchone()
-            cur_cum = int(cur_cum_row['cum'] or 0) if cur_cum_row else today_total
-
-    # 3. 지난달(전월) 및 작년 동기 누적 1회 통합 쿼리 (쿼리 2회 -> 1회 통합)
-    prev_m_year = dt.year if dt.month > 1 else dt.year - 1
-    prev_m_month = dt.month - 1 if dt.month > 1 else 12
-    prev_m_prefix = f"{prev_m_year}-{prev_m_month:02d}"
-    prev_m_target_day = min(dt.day, calendar.monthrange(prev_m_year, prev_m_month)[1])
-
-    last_y_prefix = f"{dt.year - 1}-{dt.month:02d}"
-
-    cum_rows = conn.execute('''
-        SELECT 
-            COALESCE(SUM(CASE WHEN date >= ? AND date <= ? THEN total ELSE 0 END), 0) as prev_cum,
-            COALESCE(SUM(CASE WHEN date >= ? AND date <= ? THEN total ELSE 0 END), 0) as last_y_cum
-        FROM daily_profit 
-        WHERE user_id = ? AND (
-            (date >= ? AND date <= ?) OR 
-            (date >= ? AND date <= ?)
-        )
-    ''', (
-        f"{prev_m_prefix}-01", f"{prev_m_prefix}-{prev_m_target_day:02d}",
-        f"{last_y_prefix}-01", f"{last_y_prefix}-{dt.day:02d}",
-        user_id,
-        f"{prev_m_prefix}-01", f"{prev_m_prefix}-{prev_m_target_day:02d}",
-        f"{last_y_prefix}-01", f"{last_y_prefix}-{dt.day:02d}"
-    )).fetchone()
-    prev_cum = int(cum_rows['prev_cum'] or 0) if cum_rows else 0
-    last_y_cum = int(cum_rows['last_y_cum'] or 0) if cum_rows else 0
-
-    paragraphs = []
-
-    # 단락 1: 오늘 성과 및 지난주 동요일 비교
-    p1 = f"<strong>오늘 우리 약국의 순익은 {today_total:,}원입니다.</strong>"
-    if pw_row and pw_row['total'] and int(pw_row['total']) > 0:
-        pw_total = int(pw_row['total'])
-        pw_diff = today_total - pw_total
-        pw_pct = float(round((pw_diff / float(pw_total)) * 100, 1))
-        dir_txt = "증가하며" if pw_diff >= 0 else "기록하며"
-        badge_color = "text-success" if pw_diff >= 0 else "text-danger"
-        p1 += f" 지난주 같은 {dow}요일({pw_total:,}원) 대비 <strong class='{badge_color}'>{pw_pct:+,}% {dir_txt}</strong> 주간 흐름을 힘차게 견인했습니다."
-    else:
-        p1 += f" 이번 주 {dow}요일 순익 흐름을 안정적으로 이어갔습니다."
-    p1 += f" 조제료 {disp:,}원과 함께 매약 순익 {daily:,}원, 비보험 약가차액 {nim:,}원이 조화롭게 어우러진 하루입니다."
-    paragraphs.append(p1)
-
-    # 단락 2: 지난달 및 작년 비교
-    p2_items = []
-    if prev_cum > 0:
-        m_diff = cur_cum - prev_cum
-        m_pct = float(round((m_diff / float(prev_cum)) * 100, 1))
-        m_status = "앞서 달리고 있으며" if m_diff >= 0 else "조금 신중한 흐름이며"
-        m_color = "text-success" if m_diff >= 0 else "text-danger"
-        p2_items.append(f"<strong>지난달({prev_m_month}월) 같은 시점 누적 대비 <span class='{m_color}'>{m_pct:+,}%</span></strong> {m_status}")
-
-    if last_y_cum > 0:
-        y_diff = cur_cum - last_y_cum
-        y_pct = float(round((y_diff / float(last_y_cum)) * 100, 1))
-        y_status = "더 단단해진 성장세" if y_diff >= 0 else "안정적인 방어선"
-        y_color = "text-success" if y_diff >= 0 else "text-danger"
-        p2_items.append(f"<strong>작년 {dt.month}월 동기 대비 <span class='{y_color}'>{y_pct:+,}%</span></strong> {y_status}를 보여줍니다")
-
-    if p2_items:
-        paragraphs.append("시야를 넓혀보면, " + ", ".join(p2_items) + ".")
-
-    # 단락 3: 월말 고지 전망
-    forecast_total = forecast.get('forecast_total', 0) if forecast else 0
-    if forecast_total > 0:
-        forecast_man = int(forecast_total / 10000)
-        paragraphs.append(f"현재 페이스를 유지한다면 이번 {dt.month}월은 <strong>월말 예상 순익 약 {forecast_man:,}만 원 고지</strong>를 달성할 것으로 전망됩니다. 오늘도 묵묵히 자리를 지키며 일궈내신 소중한 성과입니다.")
-
-    return {
-        'date_title': f"{dt.month}월 {dt.day}일 ({dow})",
-        'paragraphs': paragraphs
-    }
-
-
 def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4):
     """
     최근 4주간 주차별 순익 현황 및 이번 주 이익 집계 (x월 1~4주차)
@@ -780,14 +487,7 @@ def logout():
 def dashboard():
     user_id = session['user_id']
 
-    # ⚡ 대시보드 스마트 캐시 확인: 캐시 히트 시 DB 연결/쿼리 0회, 0.01초 즉시 렌더링!
     now = time.time()
-    with _CACHE_LOCK:
-        if user_id in _USER_CACHE:
-            entry = _USER_CACHE[user_id].get('dashboard_ctx')
-            if entry and (now - entry['ts'] < _CACHE_TTL):
-                return render_template('dashboard.html', **entry['ctx'])
-
     conn = get_db()
     try:
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
@@ -836,7 +536,7 @@ def dashboard():
         cur_month_rows = get_cached_current_month_dailies(conn, user_id, cur_year, cur_month)
 
         # [초고속 스마트 캐시 3] 요일별 평균 캐시 조회 (캐시 히트 시 DB 0ms)
-        dow_avg = get_cached_dow_avg(conn, user_id)
+        dow_avg = None
 
         # 작년 동월 총합 (이미 rows에 있으므로 쿼리 0회!)
         last_year_total = 0
@@ -847,11 +547,11 @@ def dashboard():
 
         # 최신일 레코드 (당월 데이터가 있으면 인메모리에서 바로 추출, 쿼리 0회)
         if cur_month_rows:
-            latest_row = cur_month_rows[-1]
+            latest_row = next((r for r in reversed(cur_month_rows) if r['date'] <= korea_today().isoformat()), None)
         else:
             latest_row = conn.execute(
-                'SELECT * FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 1',
-                (user_id,)
+                'SELECT * FROM daily_profit WHERE user_id = ? AND date <= ? ORDER BY date DESC LIMIT 1',
+                (user_id, korea_today().isoformat())
             ).fetchone()
 
         # 당월 누적 합계 (인메모리 즉시 계산)
@@ -968,6 +668,49 @@ def input_sales():
     return render_template('input.html', today=today, recent_sales=recent, yoy_day=yoy_day)
 
 
+@app.route('/business-schedule', methods=['POST'])
+@login_required
+def save_business_schedule():
+    token = request.form.get('csrf_token', '')
+    if not token or not secrets.compare_digest(token, session.get('schedule_csrf', '')):
+        return '화면을 새로고침한 후 다시 저장해 주세요.', 400
+    try:
+        weekdays = sorted(set(int(v) for v in request.form.getlist('weekdays')))
+        if any(v < 0 or v > 6 for v in weekdays):
+            raise ValueError('요일 범위를 확인해 주세요.')
+        def dates(field):
+            text = request.form.get(field, '')
+            if len(text) > 12000:
+                raise ValueError('한 번에 입력할 수 있는 날짜 수를 초과했습니다.')
+            values = sorted(set(v for v in re.split(r'[,\s]+', text.strip()) if v))
+            for value in values:
+                if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+                    raise ValueError('날짜는 YYYY-MM-DD 형식으로 입력해 주세요.')
+                datetime.date.fromisoformat(value)
+            return values
+        closed, opened = dates('closed_dates'), dates('open_dates')
+        if set(closed) & set(opened):
+            raise ValueError('같은 날짜를 휴무와 영업에 동시에 지정할 수 없습니다.')
+        year = int(request.form.get('year', korea_today().year))
+        month = int(request.form.get('month', korea_today().month))
+        if not 2 <= year <= 9998 or not 1 <= month <= 12:
+            raise ValueError('연월을 확인해 주세요.')
+    except (ValueError, TypeError):
+        return '입력 오류: 요일(0~6), 날짜(YYYY-MM-DD), 휴무·영업 중복 여부를 확인해 주세요. 뒤로 가서 수정할 수 있습니다.', 400
+    settings = json.dumps({'weekdays': weekdays, 'closed_dates': closed, 'open_dates': opened})
+    conn = get_db()
+    try:
+        conn.execute("""INSERT INTO business_schedules (user_id, settings_json) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET settings_json = excluded.settings_json""",
+            (session['user_id'], settings))
+        conn.commit()
+    finally:
+        conn.close()
+    invalidate_user_cache(session['user_id'])
+    flash('영업 일정이 저장되었습니다. 예측과 미입력일을 다시 계산했습니다.', 'success')
+    return redirect(url_for('calendar_view', year=year, month=month))
+
+
 @app.route('/calendar')
 @login_required
 def calendar_view():
@@ -986,6 +729,8 @@ def calendar_view():
 
     year = request.args.get('year', default_year, type=int)
     month = request.args.get('month', default_month, type=int)
+    if not 2 <= year <= 9998 or not 1 <= month <= 12:
+        return '올바른 연월을 입력해 주세요.', 400
 
     prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
     next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
@@ -1017,11 +762,18 @@ def calendar_view():
     total_days_worked = len(rows)
     avg_daily = int(month_summary['grand_total']) // total_days_worked if (month_summary and total_days_worked > 0) else 0
 
-    dow_avg = get_cached_dow_avg(None, user_id)
+    dow_avg = None
     last_year_total = next((int(r['grand_total']) for r in m_rows if int(r['year']) == year - 1 and int(r['month']) == month), 0)
 
     # 사전 로딩 인자 주입으로 DB 쿼리 0회 즉시 예측 계산
     forecast = get_month_forecast(None, user_id, year, month, entered_rows=rows, dow_avg=dow_avg, last_year_total=last_year_total)
+
+    conn = get_db()
+    try:
+        business_schedule = get_business_schedule(conn, user_id)
+    finally:
+        conn.close()
+    session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
 
     return render_template(
         'calendar.html',
@@ -1037,62 +789,10 @@ def calendar_view():
         month_summary=month_summary,
         total_days_worked=total_days_worked,
         avg_daily=avg_daily,
+        business_schedule=business_schedule,
+        schedule_csrf=session['schedule_csrf'],
         forecast=forecast
     )
-
-
-def generate_annual_narrative_report(year, report_data, year_total, last_year_total, best_month, worst_month, quarterly_data):
-    """연간 경영 결산 줄글 브리핑 리포트 생성"""
-    if not report_data or year_total['grand'] == 0:
-        return None
-
-    months_count = len(report_data)
-    avg_monthly = int(year_total['grand']) // months_count if months_count > 0 else 0
-    grand_man = int(year_total['grand'] / 10000)
-    avg_man = int(avg_monthly / 10000)
-
-    paragraphs = []
-
-    # 1. 연간 총평 및 전년 대비 성장률
-    p1 = f"<strong>{year}년 우리 약국의 연간 누적 순익은 총 {int(year_total['grand']):,}원(약 {grand_man:,}만 원)</strong>으로, <strong>월평균 {int(avg_monthly):,}원(약 {avg_man:,}만 원)</strong>의 결실을 거두었습니다."
-    if last_year_total and last_year_total['grand'] > 0:
-        yoy_diff = int(year_total['grand']) - int(last_year_total['grand'])
-        yoy_pct = round((yoy_diff / float(last_year_total['grand'])) * 100, 1)
-        dir_txt = "성장하며 견고한 상승 궤도" if yoy_diff >= 0 else "안정적인 방어선"
-        color = "text-success" if yoy_diff >= 0 else "text-danger"
-        p1 += f" 이는 전년도({year-1}년) 총순익 대비 <strong class='{color}'>{yoy_pct:+,}% {dir_txt}</strong>를 증명해낸 값진 성과입니다."
-    else:
-        p1 += f" 한 해 동안 흔들림 없는 경영 안정성을 확보하며 탄탄한 실적 기반을 다졌습니다."
-    paragraphs.append(p1)
-
-    # 2. 골든 먼스(최고의 달) 분석
-    if best_month:
-        best_val = int(best_month['grand_total'])
-        best_man = int(best_val / 10000)
-        p2 = f"1년 중 가장 눈부신 성과를 일궈낸 <strong>골든 먼스(Golden Month)는 👑 {best_month['month']}월({best_val:,}원, 약 {best_man:,}만 원)</strong>이었습니다."
-        if worst_month and worst_month['month'] != best_month['month']:
-            worst_val = int(worst_month['grand_total'])
-            worst_man = int(worst_val / 10000)
-            p2 += f" 상대적으로 숨을 고른 달은 {worst_month['month']}월({worst_val:,}원, 약 {worst_man:,}만 원)이었으나, 연중 큰 부침 없이 월별 실적 방어선이 훌륭하게 작동했습니다."
-        paragraphs.append(p2)
-
-    # 3. 수익 포트폴리오 및 알짜 비보험 기여도
-    if year_total['grand'] > 0:
-        nim_pct = round((float(year_total['nim']) / float(year_total['grand'])) * 100, 1)
-    else:
-        nim_pct = 0
-    dpd_pct = round(100.0 - nim_pct, 1)
-    p3 = f"수익 구성을 들여다보면, 조제료 및 매약 순익이 <strong>{int(year_total['dpd']):,}원({dpd_pct}%)</strong>으로 든든한 기초 체력을 뒷받침했습니다. 아울러 비보험 약가차액이 <strong>{int(year_total['nim']):,}원({nim_pct}%)</strong>의 알짜 마진을 창출하며 약국 수익 다각화의 핵심 엔진 역할을 톡톡히 해냈습니다."
-    paragraphs.append(p3)
-
-    # 4. 분기별 실적 흐름 및 제언
-    best_q = max(quarterly_data, key=lambda q: q['total']) if quarterly_data else None
-    if best_q and best_q['total'] > 0 and year_total['grand'] > 0:
-        q_pct = round((float(best_q['total']) / float(year_total['grand'])) * 100, 1)
-        p4 = f"분기별 흐름에서는 <strong>{best_q['quarter']}분기({int(best_q['total']):,}원, 연간의 {q_pct}%)</strong>의 모멘텀이 가장 강했습니다. 앞으로도 환절기 처방 호조와 함께 매약 상담 기회를 적극 연계하신다면 더욱 높은 수익 고지를 안정적으로 유지하실 수 있을 것입니다."
-        paragraphs.append(p4)
-
-    return paragraphs
 
 
 @app.route('/report')

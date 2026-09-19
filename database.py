@@ -264,6 +264,16 @@ def init_db():
     else:
         init_sqlite_db()
 
+    conn = get_db()
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS business_schedules (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            settings_json TEXT NOT NULL
+        )""")
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def init_sqlite_db():
     """SQLite 로컬 데이터베이스 초기화"""

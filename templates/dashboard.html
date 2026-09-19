@@ -3,6 +3,8 @@
 {% block content %}
 <h2 class="mb-4"><i class="fas fa-tachometer-alt"></i> 대시보드 <small class="text-muted">{{ current_month.year }}년 {{ current_month.month }}월</small></h2>
 
+{% set month_comparison = narrative_briefing.month_comparison if narrative_briefing else none %}
+{% set period_diff = month_comparison.diff if month_comparison else none %}
 <!-- 요약 카드 -->
 <div class="row mb-4">
     <div class="col-md-3">
@@ -33,13 +35,13 @@
         </div>
     </div>
     <div class="col-md-3">
-        <div class="card summary-card {% if (current_month.diff|default(0, true)) >= 0 %}bg-warning{% else %}bg-danger{% endif %} text-white">
+        <div class="card summary-card {% if (period_diff or 0) >= 0 %}bg-warning{% else %}bg-danger{% endif %} text-white">
             <div class="card-body">
                 <div class="card-icon">
-                    <i class="fas {% if (current_month.diff|default(0, true)) >= 0 %}fa-arrow-up{% else %}fa-arrow-down{% endif %}"></i>
+                    <i class="fas {% if (period_diff or 0) >= 0 %}fa-arrow-up{% else %}fa-arrow-down{% endif %}"></i>
                 </div>
-                <h6 class="card-subtitle">전월 대비</h6>
-                <h3 class="card-title">{{ "{:+,}".format(current_month.diff|default(0, true)) }}원</h3>
+                <h6 class="card-subtitle">전월 같은 기간 입력 실적 대비</h6>
+                <h3 class="card-title">{{ ("{:+,}".format(period_diff) ~ "원") if period_diff is not none else "비교 자료 없음" }}</h3>
             </div>
         </div>
     </div>
@@ -152,45 +154,14 @@
 </div>
 {% endif %}
 
-<!-- 🔮 1. 이번 달 최종 순익 AI 예측 배너 -->
-{% if forecast %}
-<div class="card border-0 shadow-sm mb-4" style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white;">
-    <div class="card-body p-4">
-        <div class="row align-items-center">
-            <div class="col-lg-7 mb-3 mb-lg-0">
-                <div class="d-flex align-items-center gap-2 mb-2">
-                    <span class="badge bg-primary px-3 py-2 fs-6"><i class="fas fa-robot me-1"></i> AI 월말 예측</span>
-                    <span class="text-light opacity-75 small">{{ forecast.year }}년 {{ forecast.month }}월 마감 예상 순익</span>
-                </div>
-                <h2 class="display-6 fw-bold mb-1 text-info">
-                    약 {{ "{:,}".format(forecast.forecast_total) }}원
-                </h2>
-                <div class="text-light opacity-75 small">
-                    현재 실적: <strong>{{ "{:,}".format(forecast.current_total) }}원</strong> ({{ forecast.entered_count }}일 집계) 
-                    + 남은 영업일(<strong>{{ forecast.remaining_business_days }}일</strong>) 예상 추가: <strong>+{{ "{:,}".format(forecast.expected_additional) }}원</strong>
-                </div>
-            </div>
-            <div class="col-lg-5 text-lg-end">
-                <div class="p-3 rounded-3" style="background: rgba(255,255,255,0.08);">
-                    <small class="text-light opacity-75 d-block mb-1">작년 동월({{ "{:,}".format(forecast.last_year_total) }}원) 대비 예상</small>
-                    <span class="fs-4 fw-bold {% if forecast.yoy_growth_pct >= 0 %}text-success{% else %}text-danger{% endif %}">
-                        <i class="fas {% if forecast.yoy_growth_pct >= 0 %}fa-arrow-trend-up{% else %}fa-arrow-trend-down{% endif %} me-1"></i>
-                        {{ "{:+,}".format(forecast.yoy_growth_pct) }}%
-                    </span>
-                    <span class="small text-light opacity-75 d-block mt-1">남은 영업일 요일 가중치 반영 완료</span>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
+{% if forecast %}{% include '_forecast.html' %}{% endif %}
 
-<!-- 📜 AI 경영 브리핑 리포트 -->
+<!-- 📜 실적 기반 경영 브리핑 리포트 -->
 {% if narrative_briefing %}
 <div class="card border-0 shadow-sm mb-4" style="background: #f8fafc; border-left: 5px solid #3b82f6 !important;">
     <div class="card-body p-4">
         <div class="d-flex align-items-center gap-2 mb-3">
-            <span class="badge bg-primary px-3 py-2"><i class="fas fa-feather-alt me-1"></i> AI 경영 브리핑</span>
+            <span class="badge bg-primary px-3 py-2"><i class="fas fa-feather-alt me-1"></i> 실적 기반 경영 브리핑</span>
             <span class="text-muted small fw-bold">{{ narrative_briefing.date_title }} 순익 흐름 분석</span>
         </div>
         <div class="text-dark" style="line-height: 1.85; font-size: 0.98rem;">
@@ -209,10 +180,10 @@
         <div class="card border-0 shadow-sm h-100">
             <div class="card-header bg-white d-flex justify-content-between align-items-center">
                 <span class="fw-bold"><i class="fas fa-balance-scale text-primary me-2"></i>작년 오늘 vs 올해 오늘 1:1 비교</span>
-                <span class="badge bg-light text-dark">동주차 동요일 대조</span>
+                <span class="badge bg-light text-dark">364일 전 동요일 대조</span>
             </div>
             <div class="card-body">
-                {% if yoy_day %}
+                {% if yoy_day and yoy_day.yoy_total is not none %}
                 <div class="d-flex justify-content-between align-items-center p-3 rounded-3 bg-light mb-3">
                     <div>
                         <small class="text-muted d-block">최근 영업일 ({{ yoy_day.current_date }} {{ yoy_day.current_dow }})</small>
@@ -229,7 +200,7 @@
                 <div class="d-flex justify-content-between align-items-center">
                     <span class="small text-muted">전년 대비 당일 증감:</span>
                     <span class="fw-bold fs-5 {% if yoy_day.diff >= 0 %}text-success{% else %}text-danger{% endif %}">
-                        {{ "{:+,}".format(yoy_day.diff) }}원 ({{ "{:+,}".format(yoy_day.growth_pct) }}%)
+                        {{ "{:+,}".format(yoy_day.diff) }}원 ({{ ("{:+,}".format(yoy_day.growth_pct) ~ "%") if yoy_day.growth_pct is not none else "비교 기준 0원" }})
                     </span>
                 </div>
                 <div class="small text-muted mt-2 pt-2 border-top">
@@ -246,10 +217,12 @@
     <div class="col-lg-6">
         <div class="card border-0 shadow-sm h-100">
             <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <span class="fw-bold"><i class="fas fa-heartbeat text-danger me-2"></i>약국 순익 황금비율 밸런스 진단</span>
+                <span class="fw-bold"><i class="fas fa-heartbeat text-danger me-2"></i>수익 구성 현황</span>
                 <span class="badge bg-{{ balance.status }}">{{ balance.status_text }}</span>
             </div>
             <div class="card-body">
+                {% if balance.has_breakdown %}
+                {% if balance.can_chart %}
                 <!-- 3단 프로그레스 바 -->
                 <div class="progress mb-3" style="height: 24px; font-size: 0.8rem; font-weight: bold;">
                     <div class="progress-bar bg-primary" role="progressbar" style="width: {{ balance.disp_pct }}%;" title="조제료">
@@ -263,6 +236,7 @@
                     </div>
                 </div>
 
+                {% endif %}
                 <div class="row text-center mb-3 g-1">
                     <div class="col-4">
                         <small class="text-muted d-block">조제료 순익</small>
@@ -278,6 +252,10 @@
                     </div>
                 </div>
 
+                {% else %}
+                <p>조제+일매 합계 <strong>{{ "{:,}".format(balance.combined_val) }}원</strong></p>
+                <p>비보험 차액 <strong>{{ "{:,}".format(balance.nim_val) }}원</strong></p>
+                {% endif %}
                 <div class="p-2 rounded-2 bg-light border-start border-4 border-{{ balance.status }} small">
                     <i class="fas fa-info-circle text-{{ balance.status }} me-1"></i>
                     <strong>경영 진단:</strong> {{ balance.comment }}

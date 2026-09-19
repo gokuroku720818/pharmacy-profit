@@ -1,0 +1,25 @@
+<details class="card border-0 shadow-sm mb-4 p-3" id="businessSchedule">
+  <summary class="fw-bold text-primary">영업 요일·휴무일 설정</summary>
+  <form method="POST" action="{{ url_for('save_business_schedule') }}" class="mt-3">
+    <input type="hidden" name="csrf_token" value="{{ schedule_csrf }}">
+    <input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}">
+    <p class="small text-muted">기본값은 월~토입니다. 실제 영업 요일로 변경하세요. 공휴일·명절 휴무는 아래에 직접 지정합니다. 이 설정은 모든 달의 예측과 누락 판정에 적용됩니다.</p>
+    <fieldset class="mb-3"><legend class="fs-6">정기 영업 요일</legend>
+      {% for dow in ['월','화','수','목','금','토','일'] %}
+      <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="weekdays" value="{{ loop.index0 }}" {% if loop.index0 in business_schedule.weekdays %}checked{% endif %}><span class="form-check-label">{{ dow }}</span></label>
+      {% endfor %}
+    </fieldset>
+    <div class="row g-3"><div class="col-md-6"><label for="closedDates" class="form-label">임시 휴무일</label>
+      <textarea id="closedDates" name="closed_dates" class="form-control" rows="3" placeholder="2026-09-25, 2026-09-26">{{ business_schedule.closed_dates|join(', ') }}</textarea></div>
+      <div class="col-md-6"><label for="openDates" class="form-label">정기 휴무 요일의 추가 영업일</label>
+      <textarea id="openDates" name="open_dates" class="form-control" rows="3" placeholder="2026-09-27">{{ business_schedule.open_dates|join(', ') }}</textarea></div></div>
+    <p class="small text-muted mt-2">YYYY-MM-DD 형식, 여러 날짜는 쉼표 또는 줄바꿈으로 구분합니다. 휴무일에도 이미 입력된 실적은 삭제되지 않습니다.</p>
+    <button type="submit" class="btn btn-primary">영업 일정 저장</button>
+  </form>
+</details>
+<script>
+if (location.hash === '#businessSchedule') document.getElementById('businessSchedule').open = true;
+window.addEventListener('hashchange', () => {
+  if (location.hash === '#businessSchedule') document.getElementById('businessSchedule').open = true;
+});
+</script>

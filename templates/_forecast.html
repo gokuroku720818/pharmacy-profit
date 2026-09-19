@@ -1,0 +1,40 @@
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-body p-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <div><h5 class="fw-bold mb-1">{{ forecast.year }}년 {{ forecast.month }}월 · {{ '입력 실적' if forecast.is_past else '월말 예상' }}</h5>
+        <small class="text-muted">한국시간 {{ forecast.as_of }} 기준 · 최근 8주 동요일 실적</small></div>
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('calendar_view', year=forecast.year, month=forecast.month) }}#businessSchedule">영업일·휴무 설정</a>
+    </div>
+    {% if forecast.forecast_total is not none %}
+      <h3 class="fw-bold text-primary">{{ "{:,}".format(forecast.forecast_total) }}원
+        {% if not forecast.is_past and forecast.missing_count %}<small class="fs-6 text-warning">누락분 제외 잠정치</small>{% endif %}</h3>
+      {% if not forecast.is_past and forecast.remaining_business_days %}
+      <div class="mb-2">참고 범위 {{ "{:,}".format(forecast.forecast_low) }}~{{ "{:,}".format(forecast.forecast_high) }}원</div>
+      <small class="text-muted d-block mb-2">최근 동요일의 최솟값·최댓값을 적용한 시나리오입니다. 통계적 신뢰구간은 아닙니다.</small>
+      {% endif %}
+    {% else %}<h4 class="text-secondary">예측 자료 부족</h4>
+      {% if forecast.summary_only %}<p class="small text-muted">월 합계만 있어 현재 누적과 남은 기간을 나눌 수 없습니다. 일별 자료를 입력하면 예측합니다.</p>{% else %}
+      <p class="small text-muted">남은 영업일 중 {{ forecast.unsupported_count }}일은 최근 동요일 실적이 없어 전체 월말 금액을 산출하지 않았습니다.</p>{% endif %}
+    {% endif %}
+    <div class="small">입력 실적 <strong>{{ "{:,}".format(forecast.current_total) }}원</strong> {% if forecast.summary_only %}(월 합계만 있음){% else %}({{ forecast.entered_count }}일){% endif %}
+      {% if not forecast.is_past %} · 남은 영업일 <strong>{{ forecast.remaining_business_days }}일</strong> (오늘 미입력분 포함)
+      {% if forecast.expected_additional is not none %} · 예상 추가 {{ "{:,}".format(forecast.expected_additional) }}원{% endif %}{% endif %}
+    </div>
+    {% if forecast.yoy_growth_pct is not none %}<div class="small mt-2">작년 동월 저장 합계 대비 {{ "{:+,}".format(forecast.yoy_growth_pct) }}% (작년 자료 완성도에 따라 달라짐)</div>
+    {% else %}<div class="small text-muted mt-2">전년 비교는 기준 자료가 있고 현재 누락·예측 부족이 없을 때 표시합니다.</div>{% endif %}
+    {% if forecast.summary_only %}<p class="small text-muted mt-3">일별 세부 자료 없음 — 저장된 월 합계를 표시하며, 날짜별 누락 여부는 판단하지 않습니다.</p>{% endif %}
+    {% if forecast.missing_count %}
+      <div class="alert alert-warning mt-3 mb-0 py-2">과거 지정 영업일 <strong>{{ forecast.missing_count }}일 미입력</strong> — 합계와 예측에 보충하지 않았습니다.
+        <details class="small mt-1"><summary>누락 날짜 보기</summary>{{ forecast.missing_dates|join(', ') }}</details>
+      </div>
+    {% endif %}
+    {% if forecast.future_entry_count %}<p class="small text-warning mt-2 mb-0">미래 날짜 입력 {{ forecast.future_entry_count }}건은 실적에서 제외했습니다.</p>{% endif %}
+    {% if forecast.low_sample %}<p class="small text-muted mt-2 mb-0">일부 요일은 표본이 4일 미만이므로 예측 변동이 클 수 있습니다.</p>{% endif %}
+    <details class="small mt-3"><summary class="text-muted">예측 근거 · {{ forecast.history_start }}~{{ forecast.history_end }}</summary>
+      <div class="table-responsive mt-2"><table class="table table-sm mb-0"><thead><tr><th>요일</th><th>입력 표본</th><th>평균</th><th>최소~최대</th></tr></thead><tbody>
+      {% for dow, item in forecast.weekday_samples.items() %}<tr><td>{{ dow }}</td><td>{{ item.count }}일</td><td>{{ "{:,}".format(item.mean) }}원</td><td>{{ "{:,}".format(item.low) }}~{{ "{:,}".format(item.high) }}원</td></tr>
+      {% else %}<tr><td colspan="4">최근 입력 실적이 없습니다.</td></tr>{% endfor %}
+      </tbody></table></div>
+    </details>
+  </div>
+</div>

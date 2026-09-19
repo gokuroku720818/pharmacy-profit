@@ -33,37 +33,27 @@
 
 <!-- 당월 요약 및 AI 월말 예측 배너 -->
 <div class="row g-2 mb-3">
-    <div class="col-6 col-md-3">
+    <div class="col-12 col-md-4">
         <div class="card p-3 border-0 bg-primary text-white shadow-sm">
             <small class="opacity-75">현재 누적 순익 ({{ total_days_worked }}일)</small>
             <h4 class="fw-bold mb-0">{{ "{:,}".format((month_summary.grand_total or 0) if month_summary else 0) }}원</h4>
         </div>
     </div>
-    <div class="col-6 col-md-3">
+    <div class="col-12 col-md-4">
         <div class="card p-3 border-0 bg-success text-white shadow-sm">
             <small class="opacity-75">조제 + 일매순익</small>
             <h5 class="fw-bold mb-0">{{ "{:,}".format((month_summary.dispensing_plus_daily_total or 0) if month_summary else 0) }}원</h5>
         </div>
     </div>
-    <div class="col-6 col-md-3">
+    <div class="col-12 col-md-4">
         <div class="card p-3 border-0 bg-warning text-dark shadow-sm">
             <small class="opacity-75">비보험 약가차액</small>
             <h5 class="fw-bold mb-0">{{ "{:,}".format((month_summary.non_insurance_total or 0) if month_summary else 0) }}원</h5>
         </div>
     </div>
-    <div class="col-6 col-md-3">
-        <div class="card p-3 border-0 shadow-sm" style="background: linear-gradient(135deg, #1e293b, #334155); color: white;">
-            <div class="d-flex justify-content-between align-items-center">
-                <small class="text-info fw-bold"><i class="fas fa-robot me-1"></i>월말 예상 순익</small>
-                <span class="badge {% if forecast.yoy_growth_pct >= 0 %}bg-success{% else %}bg-danger{% endif %} text-white" style="font-size: 0.7rem;">
-                    작년비 {{ "{:+,}".format(forecast.yoy_growth_pct) }}%
-                </span>
-            </div>
-            <h5 class="fw-bold mb-0 mt-1 text-info">약 {{ "{:,}".format(forecast.forecast_total) }}원</h5>
-            <small class="opacity-75" style="font-size: 0.75rem;">(남은 영업일 {{ forecast.remaining_business_days }}일 가중치 반영)</small>
-        </div>
-    </div>
 </div>
+{% include '_forecast.html' %}
+{% include '_business_schedule.html' %}
 
 <!-- 월간 달력 테이블 -->
 <div class="card border-0 shadow-sm mb-4">
@@ -90,6 +80,7 @@
                         <td class="bg-light calendar-empty-cell"></td>
                         {% else %}
                         {% set p = profit_by_day.get(day) %}
+                        {% set iso_day = '%04d-%02d-%02d'|format(year, month, day) %}
                         <td class="calendar-day-cell {% if p %}has-data{% endif %}" 
                             data-date="{{ year }}-{{ '%02d' % month }}-{{ '%02d' % day }}"
                             data-dispensing="{{ p.dispensing_fee if p else 0 }}"
@@ -117,7 +108,7 @@
                             </div>
                             {% else %}
                             <div class="py-3 text-muted small opacity-50">
-                                클릭하여 입력
+                                {% if iso_day in forecast.closed_dates %}지정 휴무일{% elif iso_day in forecast.missing_dates %}<span class="text-warning fw-bold">미입력</span>{% else %}클릭하여 입력{% endif %}
                             </div>
                             {% endif %}
                         </td>
