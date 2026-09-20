@@ -7,3 +7,15 @@ venv/
 env/
 .vscode/
 .idea/
+
+# Never add pharmacy customer, login, or financial data to Git.
+# Existing tracked files are NOT removed by .gitignore; see docs/security_runbook.md.
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite3
+data/*.csv
+data/*.xlsx
+data/*.xls
+data/export_data.json
+data/*backup*.json
