@@ -9,11 +9,13 @@ keepalive = 5
 
 
 def post_worker_init(worker):
-    """Enable pool protection and request metrics before accepting traffic."""
+    """Enable pool protection, cache coherence and metrics before traffic."""
     from importlib import import_module
     from pool_guard import install as install_pool_guard
     from runtime_metrics import install as install_metrics
+    from cache_coherence import install as install_cache_coherence
 
     app_module = import_module('app')
     install_pool_guard(import_module('database'), app_module.app)
+    install_cache_coherence(app_module)
     install_metrics(app_module)

@@ -23,6 +23,7 @@
 </div>
 
 {% set annual_split = period_components(selected_year, report_data) %}
+{% set composition_total = (annual_split.dispensing_fee + annual_split.daily_net_profit + annual_split.non_insurance_margin + year_total.extra_profit_total) if annual_split else none %}
 <!-- 🏆 1. 핵심 KPI 4대 지표 카드 -->
 <div class="row g-3 mb-4">
     <!-- 연간 총 순익 -->
@@ -57,7 +58,7 @@
     <div class="col-sm-6 col-xl-3">
         <div class="card border-0 shadow-sm h-100 bg-warning text-dark">
             <div class="card-body p-3">
-                <div class="d-flex justify-content-between align-items-center mb-2">
+                <div class="d-flex justify-content-between align-items-center mb-1">
                     <span class="small text-muted fw-bold">골든 먼스 (최고 실적)</span>
                     <span class="badge bg-dark text-white">👑 BEST</span>
                 </div>
@@ -76,7 +77,7 @@
         <div class="card border-0 shadow-sm h-100 bg-success text-white">
             <div class="card-body p-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="small opacity-75">{% if yoy_growth_pct is not none %}전년 대비 연간 성장률{% else %}비보험 알짜 마진율{% endif %}</span>
+                    <span class="small opacity-75">{% if yoy_growth_pct is not none %}전년 대비 연간 성장률{% else %}비보험 알짜 마진율 (월장부 기준){% endif %}</span>
                     <i class="fas {% if yoy_growth_pct is not none and yoy_growth_pct >= 0 %}fa-arrow-trend-up{% else %}fa-chart-pie{% endif %} opacity-50"></i>
                 </div>
                 {% if yoy_growth_pct is not none %}
@@ -96,13 +97,11 @@
 <div class="card border-0 shadow-sm mb-4" style="background: #f8fafc; border-left: 5px solid #2563eb !important;">
     <div class="card-body p-4">
         <div class="d-flex align-items-center gap-2 mb-3">
-            <span class="badge bg-primary px-3 py-2"><i class="fas fa-feather-alt me-1"></i> AI 연간 경영 결산 브리핑</span>
+            <span class="badge bg-primary px-3 py-2"><i class="fas fa-feather-alt me-1"></i>AI 연간 경영 결산 브리핑</span>
             <span class="text-muted small fw-bold">{{ selected_year }}년 순익 총평 및 전략적 분석</span>
         </div>
         <div class="text-dark" style="line-height: 1.85; font-size: 0.98rem;">
-            {% for para in narrative_paragraphs %}
-            <p class="mb-2">{{ para|safe }}</p>
-            {% endfor %}
+            {% for para in narrative_paragraphs %}<p class="mb-2">{{ para|safe }}</p>{% endfor %}
         </div>
     </div>
 </div>
@@ -121,9 +120,7 @@
                     <span class="badge bg-light text-primary fw-bold">{{ ((q.total / year_total.grand) * 100)|round(1) }}%</span>
                     {% endif %}
                 </div>
-                <div class="fs-4 fw-bold text-primary mb-2">
-                    {{ "{:,}".format(q.total) }}원
-                </div>
+                <div class="fs-4 fw-bold text-primary mb-2">{{ "{:,}".format(q.total) }}원</div>
                 <div class="progress mb-2" style="height: 5px;">
                     {% set q_rate = ((q.total / year_total.grand) * 100) if year_total.grand > 0 else 0 %}
                     <div class="progress-bar bg-primary" style="width: {{ q_rate }}%"></div>
@@ -144,36 +141,40 @@
 
 <!-- 📊 4. 다채로운 듀얼 차트 -->
 <div class="row g-4 mb-4">
-    <!-- 차트 1: 올해 vs 작년 월별 순익 콤보 차트 -->
     <div class="col-lg-8">
         <div class="card border-0 shadow-sm h-100">
             <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
                 <span class="fw-bold"><i class="fas fa-chart-line text-primary me-2"></i>월별 순익 추이 {% if chart_payload.has_last_year %}& 전년도 대조{% endif %}</span>
                 <span class="badge bg-light text-dark">단위: 원</span>
             </div>
-            <div class="card-body">
-                <canvas id="monthlyCompareChart" height="280"></canvas>
-            </div>
+            <div class="card-body"><canvas id="monthlyCompareChart" height="280"></canvas></div>
         </div>
     </div>
-
-    <!-- 차트 2: 수익 구성 비율 도넛 차트 -->
     <div class="col-lg-4">
         <div class="card border-0 shadow-sm h-100">
             <div class="card-header bg-white py-3 border-bottom">
                 <span class="fw-bold"><i class="fas fa-chart-pie text-success me-2"></i>연간 순익 구성 비율</span>
             </div>
             <div class="card-body d-flex flex-column justify-content-center">
+                <p class="text-muted small mb-2">일별 기록의 세 수익 항목 + 별도 입력 잡이익 기준 구성비입니다. 월장부 전체순익은 별도 기준입니다.</p>
                 <div style="max-height: 220px; position: relative;">
-                    {% if annual_split %}<canvas id="reportCompositionChart"></canvas>
+                    {% if composition_total is not none and composition_total > 0 %}<canvas id="reportCompositionChart"></canvas>
                     {% else %}<p class="text-muted small">연간 세부자료 확인 필요</p>{% endif %}
                 </div>
+                {% if composition_total is not none %}
+                <p class="text-muted small mt-2 mb-1">일별 기록+잡이익 기준 합계: <strong>{{ "{:,}".format(composition_total) }}원</strong></p>
+                <p class="text-muted small mb-1">월장부 전체순익: <strong>{{ "{:,}".format(year_total.grand) }}원</strong></p>
+                {% if composition_total != year_total.grand %}
+                <p class="text-warning-emphasis small mb-1">서로 다른 원본의 차액: {{ "{:+,}".format(year_total.grand - composition_total) }}원. <a href="/reconciliation">월별 대조</a>에서 확인하세요.</p>
+                {% endif %}
+                {% endif %}
                 <div class="mt-3 pt-3 border-top text-center small">
-                    <div class="d-flex justify-content-around">
-                        {% if annual_split and year_total.grand > 0 %}
-                        <div>조제료: <strong>{{ ((annual_split.dispensing_fee / year_total.grand) * 100)|round(1) }}%</strong></div>
-                        <div>일매순익: <strong>{{ ((annual_split.daily_net_profit / year_total.grand) * 100)|round(1) }}%</strong></div>
-                        <div>비보험마진: <strong>{{ ((annual_split.non_insurance_margin / year_total.grand) * 100)|round(1) }}%</strong></div>
+                    <div class="d-flex justify-content-around flex-wrap gap-2">
+                        {% if annual_split and composition_total > 0 %}
+                        <div>조제료: <strong>{{ ((annual_split.dispensing_fee / composition_total) * 100)|round(1) }}%</strong></div>
+                        <div>일매순익: <strong>{{ ((annual_split.daily_net_profit / composition_total) * 100)|round(1) }}%</strong></div>
+                        <div>비보험마진: <strong>{{ ((annual_split.non_insurance_margin / composition_total) * 100)|round(1) }}%</strong></div>
+                        <div>잡이익: <strong>{{ ((year_total.extra_profit_total / composition_total) * 100)|round(1) }}%</strong></div>
                         {% else %}<div>세부자료 확인 필요</div>{% endif %}
                     </div>
                 </div>
@@ -211,9 +212,7 @@
                     <tr {% if best_month and row.month == best_month.month %}style="background-color: rgba(254, 240, 138, 0.2);"{% endif %}>
                         <td class="ps-4">
                             <strong>{{ row.month }}월</strong>
-                            {% if best_month and row.month == best_month.month %}
-                            <span class="badge bg-warning text-dark ms-1">👑 Best</span>
-                            {% endif %}
+                            {% if best_month and row.month == best_month.month %}<span class="badge bg-warning text-dark ms-1">👑 Best</span>{% endif %}
                         </td>
                         {% if month_split.breakdown_available %}
                         <td class="text-end">{{ "{:,}".format(month_split.dispensing_fee) }}원</td>
@@ -232,16 +231,10 @@
                         </td>
                         <td class="text-end">
                             {% if row.prev_month_diff > 0 %}
-                            <span class="badge bg-success-subtle text-success">
-                                <i class="fas fa-arrow-up me-1"></i>{{ "{:+,}".format(row.prev_month_diff) }}
-                            </span>
+                            <span class="badge bg-success-subtle text-success"><i class="fas fa-arrow-up me-1"></i>{{ "{:+,}".format(row.prev_month_diff) }}</span>
                             {% elif row.prev_month_diff < 0 %}
-                            <span class="badge bg-danger-subtle text-danger">
-                                <i class="fas fa-arrow-down me-1"></i>{{ "{:+,}".format(row.prev_month_diff) }}
-                            </span>
-                            {% else %}
-                            <span class="badge bg-secondary-subtle text-secondary">-</span>
-                            {% endif %}
+                            <span class="badge bg-danger-subtle text-danger"><i class="fas fa-arrow-down me-1"></i>{{ "{:+,}".format(row.prev_month_diff) }}</span>
+                            {% else %}<span class="badge bg-secondary-subtle text-secondary">-</span>{% endif %}
                         </td>
                         <td class="text-center pe-4">
                             {% if best_month and row.month == best_month.month %}
@@ -250,9 +243,7 @@
                             <span class="badge bg-success px-2 py-1"><i class="fas fa-rocket me-1"></i>급상승</span>
                             {% elif row.prev_month_diff >= 0 %}
                             <span class="badge bg-light text-primary border">순항</span>
-                            {% else %}
-                            <span class="badge bg-light text-muted border">방어</span>
-                            {% endif %}
+                            {% else %}<span class="badge bg-light text-muted border">방어</span>{% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -270,9 +261,7 @@
                         <td class="text-center"><strong>100%</strong></td>
                         <td class="text-end">
                             {% if yoy_diff is not none and yoy_diff != 0 %}
-                            <span class="badge {% if yoy_diff > 0 %}bg-success{% else %}bg-danger{% endif %}">
-                                전년대비 {{ "{:+,}".format(yoy_diff) }}
-                            </span>
+                            <span class="badge {% if yoy_diff > 0 %}bg-success{% else %}bg-danger{% endif %}">전년대비 {{ "{:+,}".format(yoy_diff) }}</span>
                             {% endif %}
                         </td>
                         <td></td>
@@ -295,68 +284,40 @@ function formatWon(num) {
     return num.toLocaleString();
 }
 
-// 1. 월별 비교 콤보 차트
+// 1. 월별 비교 콤보 차트 (월장부 순익 기준)
 const compareCtx = document.getElementById('monthlyCompareChart');
 if (compareCtx && chartPayload) {
-    const datasets = [
-        {
-            type: 'bar',
-            label: '{{ selected_year }}년 순익',
-            data: chartPayload.cur_year,
-            backgroundColor: 'rgba(37, 99, 235, 0.75)',
-            borderColor: 'rgb(37, 99, 235)',
-            borderWidth: 1,
-            borderRadius: 4,
-            order: 2
-        }
-    ];
-
+    const datasets = [{
+        type: 'bar', label: '{{ selected_year }}년 순익', data: chartPayload.cur_year,
+        backgroundColor: 'rgba(37, 99, 235, 0.75)', borderColor: 'rgb(37, 99, 235)',
+        borderWidth: 1, borderRadius: 4, order: 2
+    }];
     if (chartPayload.has_last_year) {
         datasets.push({
-            type: 'line',
-            label: '{{ selected_year - 1 }}년 동월 순익',
-            data: chartPayload.last_year,
-            borderColor: '#ef4444',
-            borderWidth: 2,
-            borderDash: [5, 5],
-            pointRadius: 4,
-            pointBackgroundColor: '#ef4444',
-            tension: 0.3,
-            fill: false,
-            order: 1
+            type: 'line', label: '{{ selected_year - 1 }}년 동월 순익',
+            data: chartPayload.last_year, borderColor: '#ef4444', borderWidth: 2,
+            borderDash: [5, 5], pointRadius: 4, pointBackgroundColor: '#ef4444',
+            tension: 0.3, fill: false, order: 1
         });
     }
-
     new Chart(compareCtx, {
-        data: {
-            labels: chartPayload.labels,
-            datasets: datasets
-        },
+        data: { labels: chartPayload.labels, datasets: datasets },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: {
                 legend: { position: 'top' },
-                tooltip: {
-                    callbacks: {
-                        label: function(ctx) {
-                            return ctx.dataset.label + ': ' + ctx.raw.toLocaleString() + '원';
-                        }
-                    }
-                }
+                tooltip: { callbacks: { label: function(ctx) {
+                    return ctx.dataset.label + ': ' + ctx.raw.toLocaleString() + '원';
+                } } }
             },
-            scales: {
-                y: {
-                    ticks: { callback: v => formatWon(v) }
-                }
-            }
+            scales: { y: { ticks: { callback: v => formatWon(v) } } }
         }
     });
 }
 
-// 2. 수익 구성비 도넛 차트
+// 2. 구성비 분모는 차트에 표시하는 네 항목의 합계와 동일하게 유지한다.
 const compCtx = document.getElementById('reportCompositionChart');
-if (compCtx && chartPayload && annualSplit) {
+if (compCtx && annualSplit) {
     new Chart(compCtx, {
         type: 'doughnut',
         data: {
@@ -368,17 +329,12 @@ if (compCtx && chartPayload && annualSplit) {
             }]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: {
                 legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: function(ctx) {
-                            return ctx.label + ': ' + ctx.raw.toLocaleString() + '원';
-                        }
-                    }
-                }
+                tooltip: { callbacks: { label: function(ctx) {
+                    return ctx.label + ': ' + ctx.raw.toLocaleString() + '원';
+                } } }
             }
         }
     });
