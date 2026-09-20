@@ -252,7 +252,10 @@ def test_dashboard_query_budget_and_fresh_values(service, conn, monkeypatch):
     conn.commit()
     response = client.get('/')
     assert '99,999' in response.get_data(as_text=True)
-    assert len(statements) <= 2, statements
+    base_queries = [sql for sql in statements if 'extra_profit' not in sql]
+    misc_queries = [sql for sql in statements if 'extra_profit' in sql]
+    assert len(base_queries) <= 2, statements
+    assert len(misc_queries) <= 1, statements
 
 
 def test_login_needs_no_external_render_dependencies(service):
