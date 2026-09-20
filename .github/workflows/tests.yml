@@ -12,6 +12,23 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-test-password
+          POSTGRES_DB: pharmacy_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pharmacy_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Disposable GitHub Actions service only; never a production database.
+      CI_DATABASE_URL: postgresql://postgres:ci-only-test-password@127.0.0.1:5432/pharmacy_ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,5 +37,5 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pytest
-      - name: Run regression tests
+      - name: Run SQLite and real PostgreSQL regression tests
         run: python -m pytest -q
