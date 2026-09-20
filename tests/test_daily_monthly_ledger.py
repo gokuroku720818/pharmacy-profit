@@ -51,6 +51,7 @@ def test_daily_monthly_ledger_is_user_scoped_and_recomputes_previous_calendar_mo
 
 def test_dashboard_report_trend_and_export_use_one_daily_monthly_source(service, conn, monkeypatch):
     from daily_monthly_ledger import install
+    import profit_display
 
     add(conn, '2026-08-01', disp=400, daily=100, nim=50)
     conn.execute("UPDATE daily_profit SET total=900 WHERE user_id=1 AND date='2026-08-01'")
@@ -59,9 +60,15 @@ def test_dashboard_report_trend_and_export_use_one_daily_monthly_source(service,
         VALUES (1, 2026, 8, 800, 100, 999999, 0)''')
     conn.execute("INSERT INTO extra_profit (user_id,date,amount,memo) VALUES (1,'2026-08-03',50,'synthetic')")
     conn.commit()
+    # Install mutates the runtime entry points. Restore all of them afterwards
+    # so earlier legacy-compatibility tests retain their own expected behavior.
     monkeypatch.setattr(service, 'get_cached_monthly_summary', service.get_cached_monthly_summary)
     monkeypatch.setattr(service, '_daily_monthly_ledger_installed', False, raising=False)
     monkeypatch.setitem(service.app.view_functions, 'export_csv', service.app.view_functions['export_csv'])
+    monkeypatch.setitem(service.app.view_functions, 'historical_reconciliation',
+                        service.app.view_functions['historical_reconciliation'])
+    monkeypatch.setattr(profit_display, 'flash', profit_display.flash)
+    monkeypatch.setattr(profit_display, '_daily_warning_installed', False, raising=False)
     install(service)
     client = client_for(service)
     assert service.get_cached_monthly_summary(None, 1)[0]['grand_total'] == 950
@@ -75,3 +82,7 @@ def test_dashboard_report_trend_and_export_use_one_daily_monthly_source(service,
     assert '950' in csv_text and '999999' not in csv_text
     assert '400' in csv_text and '100' in csv_text and '50' in csv_text
     assert '일별 합계 차이' in csv_text
+    reconciliation = client.get('/reconciliation')
+    assert reconciliation.status_code == 200
+    html = reconciliation.get_data(as_text=True)
+    assert '공식 월합계' in html and '950' in html and '999,999' not in html
