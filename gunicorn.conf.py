@@ -1,8 +1,16 @@
-"""Keep slow database/file requests from blocking every other visitor.
+"""Single-process threaded deployment keeps existing per-user caches consistent.
 
-Gunicorn automatically reads this file, including existing Render services whose
-start command is still `gunicorn app:app`. Leave worker count at its default to
-avoid duplicating the in-process cache and increasing memory on small instances.
+Gunicorn loads this file automatically from the working directory even when
+Render's start command supplies its own worker/thread arguments.
 """
 worker_class = 'gthread'
 threads = 4
+keepalive = 5
+
+
+def post_worker_init(worker):
+    """Attach per-request timing after the Flask app is loaded, before traffic."""
+    from importlib import import_module
+    from runtime_metrics import install
+
+    install(import_module('app'))
