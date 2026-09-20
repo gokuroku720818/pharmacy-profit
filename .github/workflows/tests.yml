@@ -1,0 +1,86 @@
+name: Python regression tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-test-password
+          POSTGRES_DB: pharmacy_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pharmacy_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Disposable GitHub Actions service only; never a production database.
+      CI_DATABASE_URL: postgresql://postgres:ci-only-test-password@127.0.0.1:5432/pharmacy_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Run SQLite and real PostgreSQL regression tests
+        run: python -m pytest -q
+      - name: Smoke-test Gunicorn login and navigation without real data
+        env:
+          DATABASE_URL: ''
+          SECRET_KEY: ci-only-disposable-secret-key
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d)"
+          pid=''
+          cleanup() {
+            if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+            rm -rf "$scratch"
+          }
+          trap cleanup EXIT
+          cp -- *.py "$scratch/"
+          cp -R templates "$scratch/"
+          if [ -d static ]; then cp -R static "$scratch/"; fi
+          mkdir -p "$scratch/data"
+          cd "$scratch"
+          smoke_password="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+          SMOKE_PASSWORD="$smoke_password" python - <<'PY'
+          import os
+          import sqlite3
+          from werkzeug.security import generate_password_hash
+          import database
+          database.init_db()
+          with sqlite3.connect(database.SQLITE_PATH) as conn:
+              conn.execute('UPDATE users SET password_hash = ? WHERE username = ?',
+                           (generate_password_hash(os.environ['SMOKE_PASSWORD']), 'admin'))
+          PY
+          gunicorn -c gunicorn.conf.py -w 1 -b 127.0.0.1:8765 app:app > gunicorn.log 2>&1 &
+          pid=$!
+          ready=0
+          for attempt in $(seq 1 40); do
+            if curl -fsS --max-time 1 http://127.0.0.1:8765/health 2>/dev/null | grep -qx ok; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then cat gunicorn.log; exit 1; fi
+            sleep 0.25
+          done
+          if [ "$ready" -ne 1 ]; then cat gunicorn.log; exit 1; fi
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/login)" = '200' ]
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' -c cookies.txt -d username=admin --data-urlencode "password=$smoke_password" http://127.0.0.1:8765/login)" = '302' ]
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' -b cookies.txt http://127.0.0.1:8765/)" = '200' ]
+          [ "$(curl -sS -o /dev/null -w '%{http_code}' -b cookies.txt http://127.0.0.1:8765/input)" = '200' ]
