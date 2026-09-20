@@ -9,8 +9,11 @@ keepalive = 5
 
 
 def post_worker_init(worker):
-    """Attach per-request timing after the Flask app is loaded, before traffic."""
+    """Enable pool protection and request metrics before accepting traffic."""
     from importlib import import_module
-    from runtime_metrics import install
+    from pool_guard import install as install_pool_guard
+    from runtime_metrics import install as install_metrics
 
-    install(import_module('app'))
+    app_module = import_module('app')
+    install_pool_guard(import_module('database'), app_module.app)
+    install_metrics(app_module)
