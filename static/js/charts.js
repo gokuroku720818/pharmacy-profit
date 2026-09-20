@@ -48,16 +48,24 @@ function initDashboardCharts(monthlyData, currentMonth, yearCompare) {
                     pointRadius: 2,
                     pointHoverRadius: 6
                 }, {
-                    label: '조제+일매순익',
-                    data: monthlyData.dispensing_daily,
+                    label: '조제료',
+                    data: monthlyData.dispensing_fee,
                     borderColor: COLORS.success,
                     backgroundColor: 'transparent',
                     borderDash: [5, 5],
                     tension: 0.3,
                     pointRadius: 0
                 }, {
-                    label: '비보험약가차액',
-                    data: monthlyData.non_insurance,
+                    label: '일매순익',
+                    data: monthlyData.daily_net_profit,
+                    borderColor: COLORS.purple,
+                    backgroundColor: 'transparent',
+                    borderDash: [4, 4],
+                    tension: 0.3,
+                    pointRadius: 0
+                }, {
+                    label: '비보험마진',
+                    data: monthlyData.non_insurance_margin,
                     borderColor: COLORS.orange,
                     backgroundColor: 'transparent',
                     borderDash: [3, 3],
@@ -80,14 +88,14 @@ function initDashboardCharts(monthlyData, currentMonth, yearCompare) {
 
     // 매출 구성 도넛
     const compCtx = document.getElementById('compositionChart');
-    if (compCtx && currentMonth) {
+    if (compCtx && currentMonth && currentMonth.breakdown_available) {
         new Chart(compCtx, {
             type: 'doughnut',
             data: {
-                labels: ['조제+일매순익', '비보험약가차액'],
+                labels: ['조제료', '일매순익', '비보험마진'],
                 datasets: [{
-                    data: [currentMonth.dispensing_plus_daily || 0, currentMonth.non_insurance || 0],
-                    backgroundColor: [COLORS.primary, COLORS.success],
+                    data: [currentMonth.dispensing_fee, currentMonth.daily_net_profit, currentMonth.non_insurance_margin],
+                    backgroundColor: [COLORS.primary, COLORS.success, COLORS.warning],
                     borderWidth: 2
                 }]
             },
@@ -262,13 +270,19 @@ function initWeeklyTrendChart(weeklyData) {
             labels: weeklyData.labels,
             datasets: [
                 {
-                    label: '조제+일매순익',
-                    data: weeklyData.disp_plus_daily,
+                    label: '조제료',
+                    data: weeklyData.dispensing,
                     backgroundColor: COLORS.primary,
                     borderRadius: 4
                 },
                 {
-                    label: '비보험약가차액',
+                    label: '일매순익',
+                    data: weeklyData.daily,
+                    backgroundColor: COLORS.purple,
+                    borderRadius: 4
+                },
+                {
+                    label: '비보험마진',
                     data: weeklyData.non_insurance,
                     backgroundColor: COLORS.success,
                     borderRadius: 4
@@ -300,6 +314,28 @@ function initWeeklyTrendChart(weeklyData) {
                     }
                 }
             }
+        }
+    });
+}
+
+
+// Unknown historical component values are intentional Chart.js gaps, not zeros.
+function initThreeWayTrendChart(data) {
+    const canvas = document.getElementById('monthlyComponentChart');
+    if (!canvas || !data) return;
+    const fields = [
+        ['조제료', 'dispensing_fee', COLORS.primary],
+        ['일매순익', 'daily_net_profit', COLORS.success],
+        ['비보험마진', 'non_insurance_margin', COLORS.warning]
+    ];
+    new Chart(canvas, {
+        type: 'bar',
+        data: {labels: data.labels, datasets: fields.map(([label, key, color]) => ({
+            label: label, data: data[key], backgroundColor: color, borderRadius: 3
+        }))},
+        options: {responsive: true, maintainAspectRatio: false,
+            plugins: {legend: {position: 'top'}},
+            scales: {x: {stacked: true}, y: {stacked: true, ticks: {callback: v => formatNumber(v)}}}
         }
     });
 }

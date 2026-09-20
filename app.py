@@ -21,6 +21,8 @@ import threading
 from urllib.parse import quote
 
 app = Flask(__name__)
+from profit_display import install as install_profit_display
+install_profit_display(app)
 app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-profit-saas-super-secret-key-2026')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 86400  # 정적 에셋 24시간 브라우저 캐싱
 
@@ -951,16 +953,24 @@ def export_csv(year):
         rows = conn.execute('''
             SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? ORDER BY month
         ''', (user_id, year)).fetchall()
+        from profit_components import load_monthly_components, attach_components
+        grouped = load_monthly_components(conn, user_id)
+        detailed_rows = attach_components(rows, grouped)
     finally:
         conn.close()
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([f'[{pharmacy}] {year}년 순익 리포트'])
-    writer.writerow(['연도', '월', '조제+일매순익', '비보험약가차액', '전체합계', '전월대비'])
-    for r in rows:
-        writer.writerow([r['year'], r['month'], r['dispensing_plus_daily_total'],
-                         r['non_insurance_total'], r['grand_total'], r['prev_month_diff']])
+    writer.writerow(['연도', '월', '조제료', '일매순익', '비보험마진', '전체합계', '전월대비', '세부자료 상태'])
+    for r in detailed_rows:
+        known = r['breakdown_available']
+        writer.writerow([r['year'], r['month'],
+                         r['dispensing_fee'] if known else '',
+                         r['daily_net_profit'] if known else '',
+                         r['non_insurance_margin'] if known else '',
+                         r['grand_total'], r['prev_month_diff'],
+                         '확인됨' if known else '세부자료 확인 필요'])
 
     output.seek(0)
     return send_file(
@@ -1014,7 +1024,8 @@ def trend():
     ratio_data = {
         'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
         'dispensing': [int(r['dispensing_plus_daily_total']) for r in rows],
-        'non_insurance': [int(r['non_insurance_total']) for r in rows]
+        'non_insurance': [int(r['non_insurance_total']) for r in rows],
+        'totals': [int(r['grand_total']) for r in rows]
     }
 
     heatmap_data = []

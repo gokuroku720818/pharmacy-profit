@@ -6,6 +6,16 @@
 <div class="row mb-4">
     <div class="col-md-12">
         <div class="card">
+            <div class="card-header"><i class="fas fa-layer-group"></i> 월별 조제료 · 일매순익 · 비보험마진</div>
+            <div class="card-body"><canvas id="monthlyComponentChart" height="260"></canvas>
+                <small class="text-muted">원본 세부자료가 없는 달은 금액을 추정하지 않고 표시하지 않습니다.</small></div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card">
             <div class="card-header">
                 <i class="fas fa-calendar-alt"></i> 연도별 월 순익 비교
             </div>
@@ -86,5 +96,7 @@
     const dayOfWeekData = {{ day_of_week_data|tojson }};
     const growthData = {{ growth_data|tojson }};
     initTrendCharts(yearlyData, dayOfWeekData, growthData);
+    const splitTrendData = {{ three_way_series(ratio_data.labels, ratio_data.dispensing, ratio_data.non_insurance, ratio_data.totals)|tojson }};
+    initThreeWayTrendChart(splitTrendData);
 </script>
 {% endblock %}
