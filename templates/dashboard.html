@@ -5,27 +5,37 @@
 
 {% set month_comparison = narrative_briefing.month_comparison if narrative_briefing else none %}
 {% set period_diff = month_comparison.diff if month_comparison else none %}
+{% set split = components_for(current_month.year, current_month.month, current_month.dispensing_plus_daily, current_month.non_insurance, current_month.grand_total) %}
 <!-- 요약 카드 -->
-<div class="row mb-4">
-    <div class="col-md-3">
+<div class="row row-cols-1 row-cols-md-2 row-cols-xl-5 g-3 mb-4">
+    <div class="col">
         <div class="card summary-card bg-primary text-white">
             <div class="card-body">
                 <div class="card-icon"><i class="fas fa-prescription-bottle-alt"></i></div>
-                <h6 class="card-subtitle">조제+일매순익</h6>
-                <h3 class="card-title">{{ "{:,}".format(current_month.dispensing_plus_daily|default(0, true)) }}원</h3>
+                <h6 class="card-subtitle">조제료</h6>
+                <h3 class="card-title">{{ ("{:,}".format(split.dispensing_fee) ~ "원") if split.breakdown_available else "세부자료 확인 필요" }}</h3>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col">
+        <div class="card summary-card bg-success text-white">
+            <div class="card-body">
+                <div class="card-icon"><i class="fas fa-store"></i></div>
+                <h6 class="card-subtitle">일매순익</h6>
+                <h3 class="card-title">{{ ("{:,}".format(split.daily_net_profit) ~ "원") if split.breakdown_available else "세부자료 확인 필요" }}</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col">
         <div class="card summary-card bg-success text-white">
             <div class="card-body">
                 <div class="card-icon"><i class="fas fa-pills"></i></div>
-                <h6 class="card-subtitle">비보험약가차액</h6>
+                <h6 class="card-subtitle">비보험마진</h6>
                 <h3 class="card-title">{{ "{:,}".format(current_month.non_insurance|default(0, true)) }}원</h3>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col">
         <div class="card summary-card bg-info text-white">
             <div class="card-body">
                 <div class="card-icon"><i class="fas fa-coins"></i></div>
@@ -34,7 +44,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-3">
+    <div class="col">
         <div class="card summary-card {% if (period_diff or 0) >= 0 %}bg-warning{% else %}bg-danger{% endif %} text-white">
             <div class="card-body">
                 <div class="card-icon">
@@ -114,11 +124,15 @@
                         <!-- 세부 구성 내역 -->
                         <div class="pt-2 border-top small">
                             <div class="d-flex justify-content-between text-muted mb-1">
-                                <span>조제+일매:</span>
-                                <strong class="text-dark">{{ "{:,}".format(w.disp_plus_daily) }}원</strong>
+                                <span>조제료:</span>
+                                <strong class="text-dark">{{ "{:,}".format(w.dispensing_sum) }}원</strong>
                             </div>
                             <div class="d-flex justify-content-between text-muted mb-1">
-                                <span>비보험 차액:</span>
+                                <span>일매순익:</span>
+                                <strong class="text-dark">{{ "{:,}".format(w.daily_sum) }}원</strong>
+                            </div>
+                            <div class="d-flex justify-content-between text-muted mb-1">
+                                <span>비보험마진:</span>
                                 <strong class="text-dark">{{ "{:,}".format(w.nim_sum) }}원</strong>
                             </div>
                             <div class="d-flex justify-content-between text-muted">
@@ -253,7 +267,7 @@
                 </div>
 
                 {% else %}
-                <p>조제+일매 합계 <strong>{{ "{:,}".format(balance.combined_val) }}원</strong></p>
+                <p class="text-muted small">조제료·일매순익 세부자료 확인 필요</p>
                 <p>비보험 차액 <strong>{{ "{:,}".format(balance.nim_val) }}원</strong></p>
                 {% endif %}
                 <div class="p-2 rounded-2 bg-light border-start border-4 border-{{ balance.status }} small">
@@ -305,13 +319,15 @@
 
 {% block scripts %}
 <script>
-    const monthlyData = {{ monthly_data|tojson }};
-    const currentMonth = {{ current_month_data|tojson }};
+    const monthlyData = {{ three_way_series(monthly_data.labels, monthly_data.dispensing_daily, monthly_data.non_insurance, monthly_data.totals)|tojson }};
+    const currentMonth = {{ split|tojson }};
     const yearCompare = {{ year_compare|tojson }};
     initDashboardCharts(monthlyData, currentMonth, yearCompare);
 
     {% if weekly_stats and weekly_stats.chart_data %}
     const weeklyChartData = {{ weekly_stats.chart_data|tojson }};
+    weeklyChartData.dispensing = {{ weekly_stats.weeks|map(attribute='dispensing_sum')|list|tojson }};
+    weeklyChartData.daily = {{ weekly_stats.weeks|map(attribute='daily_sum')|list|tojson }};
     initWeeklyTrendChart(weeklyChartData);
     {% endif %}
 </script>

@@ -22,6 +22,7 @@
     </div>
 </div>
 
+{% set annual_split = period_components(selected_year, report_data) %}
 <!-- 🏆 1. 핵심 KPI 4대 지표 카드 -->
 <div class="row g-3 mb-4">
     <!-- 연간 총 순익 -->
@@ -110,6 +111,7 @@
 <!-- 🗓️ 3. 분기별(Q1~Q4) 실적 카드 덱 -->
 <div class="row g-3 mb-4">
     {% for q in quarters %}
+    {% set quarter_split = period_components(selected_year, report_data, q.months) %}
     <div class="col-sm-6 col-lg-3">
         <div class="card border-0 shadow-sm h-100">
             <div class="card-body p-3">
@@ -127,8 +129,11 @@
                     <div class="progress-bar bg-primary" style="width: {{ q_rate }}%"></div>
                 </div>
                 <div class="d-flex justify-content-between text-muted" style="font-size: 0.78rem;">
-                    <span>조제+일매: {{ "{:,}".format(q.dpd) }}</span>
-                    <span>비보험: {{ "{:,}".format(q.nim) }}</span>
+                    {% if quarter_split %}
+                    <span>조제료: {{ "{:,}".format(quarter_split.dispensing_fee) }}</span>
+                    <span>일매순익: {{ "{:,}".format(quarter_split.daily_net_profit) }}</span>
+                    <span>비보험마진: {{ "{:,}".format(quarter_split.non_insurance_margin) }}</span>
+                    {% else %}<span>세부자료 확인 필요</span>{% endif %}
                 </div>
             </div>
         </div>
@@ -159,16 +164,16 @@
             </div>
             <div class="card-body d-flex flex-column justify-content-center">
                 <div style="max-height: 220px; position: relative;">
-                    <canvas id="reportCompositionChart"></canvas>
+                    {% if annual_split %}<canvas id="reportCompositionChart"></canvas>
+                    {% else %}<p class="text-muted small">연간 세부자료 확인 필요</p>{% endif %}
                 </div>
                 <div class="mt-3 pt-3 border-top text-center small">
                     <div class="d-flex justify-content-around">
-                        <div>
-                            <span class="badge bg-primary me-1">■</span> 조제+일매: <strong>{{ dpd_pct }}%</strong>
-                        </div>
-                        <div>
-                            <span class="badge bg-success me-1">■</span> 비보험마진: <strong>{{ nim_pct }}%</strong>
-                        </div>
+                        {% if annual_split and year_total.grand > 0 %}
+                        <div>조제료: <strong>{{ ((annual_split.dispensing_fee / year_total.grand) * 100)|round(1) }}%</strong></div>
+                        <div>일매순익: <strong>{{ ((annual_split.daily_net_profit / year_total.grand) * 100)|round(1) }}%</strong></div>
+                        <div>비보험마진: <strong>{{ ((annual_split.non_insurance_margin / year_total.grand) * 100)|round(1) }}%</strong></div>
+                        {% else %}<div>세부자료 확인 필요</div>{% endif %}
                     </div>
                 </div>
             </div>
@@ -188,8 +193,9 @@
                 <thead class="table-light text-muted small">
                     <tr>
                         <th class="ps-4">월</th>
-                        <th class="text-end">조제+일매순익</th>
-                        <th class="text-end">비보험약가차액</th>
+                        <th class="text-end">조제료</th>
+                        <th class="text-end">일매순익</th>
+                        <th class="text-end">비보험마진</th>
                         <th class="text-end">전체 합계</th>
                         <th style="width: 140px;" class="text-center">연간 비중</th>
                         <th class="text-end">전월 대비</th>
@@ -199,6 +205,7 @@
                 <tbody>
                     {% for row in report_data %}
                     {% set m_share = ((row.grand_total / year_total.grand) * 100)|round(1) if year_total.grand > 0 else 0 %}
+                    {% set month_split = components_for(selected_year, row.month, row.dispensing_plus_daily_total, row.non_insurance_total, row.grand_total) %}
                     <tr {% if best_month and row.month == best_month.month %}style="background-color: rgba(254, 240, 138, 0.2);"{% endif %}>
                         <td class="ps-4">
                             <strong>{{ row.month }}월</strong>
@@ -206,8 +213,11 @@
                             <span class="badge bg-warning text-dark ms-1">👑 Best</span>
                             {% endif %}
                         </td>
-                        <td class="text-end">{{ "{:,}".format(row.dispensing_plus_daily_total) }}원</td>
-                        <td class="text-end text-success fw-bold">{{ "{:,}".format(row.non_insurance_total) }}원</td>
+                        {% if month_split.breakdown_available %}
+                        <td class="text-end">{{ "{:,}".format(month_split.dispensing_fee) }}원</td>
+                        <td class="text-end">{{ "{:,}".format(month_split.daily_net_profit) }}원</td>
+                        <td class="text-end text-success fw-bold">{{ "{:,}".format(month_split.non_insurance_margin) }}원</td>
+                        {% else %}<td class="text-center text-muted" colspan="3">세부자료 확인 필요</td>{% endif %}
                         <td class="text-end fw-bold text-dark fs-6">{{ "{:,}".format(row.grand_total) }}원</td>
                         <td class="text-center">
                             <div class="d-flex align-items-center gap-1">
@@ -247,8 +257,11 @@
                 <tfoot class="table-dark">
                     <tr>
                         <td class="ps-4"><strong>연간 합계</strong></td>
-                        <td class="text-end"><strong>{{ "{:,}".format(year_total.dpd) }}원</strong></td>
-                        <td class="text-end"><strong>{{ "{:,}".format(year_total.nim) }}원</strong></td>
+                        {% if annual_split %}
+                        <td class="text-end"><strong>{{ "{:,}".format(annual_split.dispensing_fee) }}원</strong></td>
+                        <td class="text-end"><strong>{{ "{:,}".format(annual_split.daily_net_profit) }}원</strong></td>
+                        <td class="text-end"><strong>{{ "{:,}".format(annual_split.non_insurance_margin) }}원</strong></td>
+                        {% else %}<td class="text-center text-muted" colspan="3">세부자료 확인 필요</td>{% endif %}
                         <td class="text-end"><strong class="fs-6 text-warning">{{ "{:,}".format(year_total.grand) }}원</strong></td>
                         <td class="text-center"><strong>100%</strong></td>
                         <td class="text-end">
@@ -270,6 +283,7 @@
 {% block scripts %}
 <script>
 const chartPayload = {{ chart_payload|tojson }};
+const annualSplit = {{ annual_split|tojson }};
 
 function formatWon(num) {
     if (num >= 100000000) return (num / 100000000).toFixed(1) + '억';
@@ -338,14 +352,14 @@ if (compareCtx && chartPayload) {
 
 // 2. 수익 구성비 도넛 차트
 const compCtx = document.getElementById('reportCompositionChart');
-if (compCtx && chartPayload) {
+if (compCtx && chartPayload && annualSplit) {
     new Chart(compCtx, {
         type: 'doughnut',
         data: {
-            labels: ['조제+일매순익', '비보험약가차액'],
+            labels: ['조제료', '일매순익', '비보험마진'],
             datasets: [{
-                data: chartPayload.composition,
-                backgroundColor: ['#2563eb', '#10b981'],
+                data: [annualSplit.dispensing_fee, annualSplit.daily_net_profit, annualSplit.non_insurance_margin],
+                backgroundColor: ['#2563eb', '#10b981', '#f59e0b'],
                 borderWidth: 2
             }]
         },
