@@ -11,17 +11,19 @@ keepalive = 5
 
 
 def post_worker_init(worker):
-    """Install daily-only accounting before cache locks, then security/metrics."""
+    """Install daily-only accounting and labels before cache locks and metrics."""
     from importlib import import_module
     from pool_guard import install as install_pool_guard
     from runtime_metrics import install as install_metrics
     from cache_coherence import install as install_cache_coherence
     from daily_only import install as install_daily_only
+    from daily_labels import install as install_daily_labels
     from response_security import install as install_response_security
 
     app_module = import_module('app')
     install_response_security(app_module.app)
     install_pool_guard(import_module('database'), app_module.app)
     install_daily_only(app_module)
+    install_daily_labels(app_module)
     install_cache_coherence(app_module)
     install_metrics(app_module)
