@@ -7,9 +7,9 @@ Standalone Flask test apps keep uncached, isolated behavior.
 import sys
 import time
 
-from flask import current_app, g, session
+from flask import current_app, g, make_response, redirect, render_template_string, session, url_for
 from database import get_db
-from extra_profit import monthly_totals
+from extra_profit import merge_monthly_summaries, monthly_totals
 from profit_components import attach_components, load_monthly_components, total_components
 
 
@@ -115,5 +115,72 @@ def install(app):
         return {'components_for': components_for,
                 'period_components': period_components,
                 'three_way_series': three_way_series}
+
+    @app.route('/reconciliation', methods=['GET'])
+    def historical_reconciliation():
+        """Privately explain missing historical breakdowns without editing source ledgers."""
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        user_id = session['user_id']
+        conn = get_db()
+        try:
+            rows = conn.execute('''
+                SELECT year, month, dispensing_plus_daily_total, non_insurance_total,
+                       grand_total, prev_month_diff
+                FROM monthly_summary WHERE user_id = ? ORDER BY year, month
+            ''', (user_id,)).fetchall()
+            extras = monthly_totals(conn, user_id)
+            sources = load_monthly_components(conn, user_id)
+            summaries = merge_monthly_summaries(rows, extras)
+            checked = attach_components(summaries, sources)
+        finally:
+            conn.close()
+        entries = []
+        for item in checked:
+            source = sources.get((int(item['year']), int(item['month'])))
+            if source is None:
+                status = '일별 기록 없음'
+                difference = None
+                combined_diff = None
+                margin_diff = None
+            else:
+                status = '월장부와 일치' if item['breakdown_available'] else '월장부와 불일치'
+                difference = int(item['grand_total']) - int(item['extra_profit_total']) - int(source['grand_total'])
+                combined_diff = int(item['dispensing_plus_daily_total']) - int(source['dispensing_fee']) - int(source['daily_net_profit'])
+                margin_diff = int(item['non_insurance_total']) - int(source['non_insurance_margin'])
+            entries.append({'year': item['year'], 'month': item['month'], 'status': status,
+                            'source': source, 'grand_total': item['grand_total'],
+                            'extra': item['extra_profit_total'], 'difference': difference,
+                            'combined_diff': combined_diff, 'margin_diff': margin_diff})
+        page = render_template_string('''<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>월별 세부자료 대조</title><style>
+body{font-family:system-ui,sans-serif;max-width:1200px;margin:24px auto;padding:0 14px;color:#182333}
+a{color:#135bb4}p{line-height:1.6}.table-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px;white-space:nowrap}
+th,td{padding:10px;border-bottom:1px solid #d9e0e8;text-align:right}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+.warn{color:#a44409;font-weight:700}.ok{color:#16703f}.empty{color:#636b75}
+</style></head><body>
+<p><a href="{{ url_for('report') }}">← 연간 리포트로 돌아가기</a></p>
+<h1>월별 세부자료 대조</h1>
+<p>월장부와 일별 기록은 과거 엑셀에서 따로 가져왔을 수 있습니다. 아래 세 금액은 <strong>일별 기록 합계</strong>입니다.
+'월장부와 불일치'는 확정된 월 세부금액이 아니라 대조용 숫자입니다. 월장부 총액·잡이익·기존 데이터는 변경하지 않습니다.</p>
+<div class="table-wrap"><table><thead><tr><th>월</th><th>대조 상태</th><th>일별 조제료</th><th>일별 일매순익</th><th>일별 비보험마진</th><th>월장부 전체합계</th><th>월장부-일별 총액 차이</th><th>조제+일매 차이</th><th>비보험 차이</th></tr></thead>
+<tbody>{% for row in entries %}<tr><td>{{ row.year }}년 {{ row.month }}월</td>
+<td class="{% if row.status == '월장부와 일치' %}ok{% elif row.source %}warn{% else %}empty{% endif %}">{{ row.status }}</td>
+<td>{{ '{:,}'.format(row.source.dispensing_fee) if row.source else '—' }}</td>
+<td>{{ '{:,}'.format(row.source.daily_net_profit) if row.source else '—' }}</td>
+<td>{{ '{:,}'.format(row.source.non_insurance_margin) if row.source else '—' }}</td>
+<td>{{ '{:,}'.format(row.grand_total) }}</td>
+<td>{{ '{:+,}'.format(row.difference) if row.difference is not none else '—' }}</td>
+<td>{{ '{:+,}'.format(row.combined_diff) if row.combined_diff is not none else '—' }}</td>
+<td>{{ '{:+,}'.format(row.margin_diff) if row.margin_diff is not none else '—' }}</td></tr>{% else %}<tr><td colspan="9">월별 자료가 없습니다.</td></tr>{% endfor %}</tbody></table></div>
+<p>차이는 월장부 금액에서 일별 기록 합계(잡이익은 별도 제외)를 뺀 값입니다. 일별 기록이 없는 달은 세부 금액을 만들 수 없습니다.</p>
+</body></html>''', entries=entries)
+        response = make_response(page)
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        return response
 
     app.extensions['three_profit_display_installed'] = True
