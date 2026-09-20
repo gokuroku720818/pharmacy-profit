@@ -1,0 +1,45 @@
+name: Finalize three-profit chart assets
+
+on:
+  push:
+    branches: [ui-three-profit-components-20260920]
+
+permissions:
+  contents: write
+
+jobs:
+  one-time-fix:
+    if: "github.event.head_commit.message == 'build: apply chart cache-bust and restore report line endings'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ui-three-profit-components-20260920
+      - name: Version the chart URL and preserve original report CRLF format
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          base = Path('templates/base.html')
+          text = base.read_text(encoding='utf-8')
+          old = "url_for('static', filename='js/charts.js')"
+          new = "url_for('static', filename='js/charts.js', v='three-profit-20260920')"
+          assert text.count(old) == 1
+          base.write_text(text.replace(old, new, 1), encoding='utf-8')
+          report = Path('templates/report.html')
+          contents = report.read_bytes()
+          assert b'\r\n' not in contents
+          report.write_bytes(contents.replace(b'\n', b'\r\n'))
+          PY
+          git diff --check
+          git diff --stat
+      - name: Commit the two precise view fixes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- templates/base.html templates/report.html
+          git diff --cached --quiet && { echo 'No changes found'; exit 1; }
+          git commit -m 'fix: bust cached chart JS and retain report line endings'
+          git push origin HEAD:ui-three-profit-components-20260920
