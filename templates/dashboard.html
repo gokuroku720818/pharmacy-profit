@@ -320,7 +320,7 @@
 {% block scripts %}
 <script>
     const monthlyData = {{ three_way_series(monthly_data.labels, monthly_data.dispensing_daily, monthly_data.non_insurance, monthly_data.totals)|tojson }};
-    const currentMonth = {{ split|tojson }};
+    const currentMonth = {{ components_for(current_month.year, current_month.month, current_month.dispensing_plus_daily, current_month.non_insurance, current_month.grand_total)|tojson }};
     const yearCompare = {{ year_compare|tojson }};
     initDashboardCharts(monthlyData, currentMonth, yearCompare);
 

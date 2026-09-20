@@ -283,7 +283,7 @@
 {% block scripts %}
 <script>
 const chartPayload = {{ chart_payload|tojson }};
-const annualSplit = {{ annual_split|tojson }};
+const annualSplit = {{ period_components(selected_year, report_data)|tojson }};
 
 function formatWon(num) {
     if (num >= 100000000) return (num / 100000000).toFixed(1) + '억';
