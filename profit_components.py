@@ -31,10 +31,13 @@ def load_monthly_components(conn, user_id):
 
 
 def attach_components(summary_rows, grouped):
-    """Preserve totals, showing three source-derived values only when verified.
+    """Preserve monthly totals and split only when independent components reconcile.
 
-    The supplemental ledger adds to grand_total but never disguises an absent
-    or contradictory historical three-way breakdown as a known value.
+    Historical daily ``total`` is a separate imported Excel cell, not the
+    authoritative sum of independently stored component cells. A discrepancy
+    in that one redundant field must not hide a three-way split whose actual
+    component sums *and* monthly displayed total all reconcile. If any of
+    those authoritative checks fail, continue showing unknown components.
     """
     details = []
     for summary in summary_rows:
@@ -47,7 +50,6 @@ def attach_components(summary_rows, grouped):
         verified = bool(source is not None and
                         source['dispensing_fee'] + source['daily_net_profit'] == combined and
                         source['non_insurance_margin'] == nim and
-                        source['grand_total'] == grand - extra and
                         combined + nim + extra == grand)
         item['extra_profit_total'] = extra
         item['breakdown_available'] = verified
