@@ -58,16 +58,27 @@ def install(module):
     for endpoint in ('dashboard', 'input_sales'):
         original_view = module.app.view_functions[endpoint]
 
-        def make_page(fn):
+        def make_page(fn, endpoint_name):
             @wraps(fn)
             def synchronized_page(*args, **kwargs):
                 if request.method != 'GET' or 'user_id' not in session:
                     return fn(*args, **kwargs)
-                with for_user(session['user_id']):
-                    return fn(*args, **kwargs)
+                user_id = session['user_id']
+                with for_user(user_id):
+                    response = fn(*args, **kwargs)
+                    if endpoint_name == 'dashboard':
+                        # dashboard preloads only its selected month's daily rows.
+                        # /input promises the latest 20 across ALL months. Its own
+                        # indexed query is authoritative; never reuse this partial
+                        # month snapshot as a complete recent-history cache.
+                        with module._CACHE_LOCK:
+                            bucket = module._USER_CACHE.get(user_id)
+                            if bucket is not None:
+                                bucket.pop('input_cache', None)
+                    return response
             return synchronized_page
 
-        module.app.view_functions[endpoint] = make_page(original_view)
+        module.app.view_functions[endpoint] = make_page(original_view, endpoint)
 
     original_invalidate_user = module.invalidate_user_cache
 
