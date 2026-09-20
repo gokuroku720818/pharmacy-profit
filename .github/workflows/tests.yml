@@ -87,3 +87,14 @@ jobs:
           [ "$(curl -sS -o /dev/null -w '%{http_code}' -c cookies.txt -d username=admin --data-urlencode "password=$smoke_password" http://127.0.0.1:8765/login)" = '302' ]
           [ "$(curl -sS -o /dev/null -w '%{http_code}' -b cookies.txt http://127.0.0.1:8765/)" = '200' ]
           [ "$(curl -sS -o /dev/null -w '%{http_code}' -b cookies.txt http://127.0.0.1:8765/input)" = '200' ]
+          # Assert the actual Gunicorn worker (not merely a Flask unit app) has the security hook.
+          curl -fsS -D financial-headers.txt -o /dev/null -b cookies.txt http://127.0.0.1:8765/input
+          grep -qi '^cache-control: private, no-store, max-age=0' financial-headers.txt
+          grep -qi '^x-frame-options: DENY' financial-headers.txt
+          grep -qi '^x-content-type-options: nosniff' financial-headers.txt
+          curl -fsS -D export-headers.txt -o /dev/null -b cookies.txt http://127.0.0.1:8765/export/2026
+          grep -qi '^cache-control: private, no-store, max-age=0' export-headers.txt
+          grep -qi '^content-disposition: attachment;' export-headers.txt
+          curl -fsS -D static-headers.txt -o /dev/null http://127.0.0.1:8765/static/js/ocr_extract.js
+          if grep -qi '^cache-control:.*no-store' static-headers.txt; then echo 'Static asset caching disabled'; exit 1; fi
+          grep -qi '^cache-control:.*max-age=86400' static-headers.txt
