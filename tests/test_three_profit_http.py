@@ -29,10 +29,10 @@ def test_verified_three_components_appear_in_dashboard_calendar_report_and_csv(s
     export = client.get('/export/2026')
     assert export.status_code == 200
     parsed = list(csv.reader(io.StringIO(export.get_data().decode('utf-8-sig'))))
-    assert parsed[1][:8] == ['연도', '월', '조제료', '일매순익', '비보험마진', '전체합계', '전월대비', '세부자료 상태']
+    assert parsed[1][:9] == ['연도', '월', '조제료', '일매순익', '비보험마진', '잡이익', '전체합계', '전월대비', '세부자료 상태']
     september = next(row for row in parsed[2:] if row[0:2] == ['2026', '9'])
-    assert september[2:6] == ['12345', '6789', '4321', '23455']
-    assert september[7] == '확인됨'
+    assert september[2:7] == ['12345', '6789', '4321', '0', '23455']
+    assert september[8] == '확인됨'
 
 
 def test_monthly_only_history_keeps_total_and_never_invents_components(service, conn):
@@ -51,5 +51,6 @@ def test_monthly_only_history_keeps_total_and_never_invents_components(service, 
     parsed = list(csv.reader(io.StringIO(client.get('/export/2026').get_data().decode('utf-8-sig'))))
     august = next(row for row in parsed[2:] if row[0:2] == ['2026', '8'])
     assert august[2:5] == ['', '', '']
-    assert august[5] == '1000'
-    assert august[7] == '세부자료 확인 필요'
+    assert august[5] == '0'
+    assert august[6] == '1000'
+    assert august[8] == '세부자료 확인 필요'

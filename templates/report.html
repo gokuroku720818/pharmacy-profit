@@ -133,6 +133,7 @@
                     <span>조제료: {{ "{:,}".format(quarter_split.dispensing_fee) }}</span>
                     <span>일매순익: {{ "{:,}".format(quarter_split.daily_net_profit) }}</span>
                     <span>비보험마진: {{ "{:,}".format(quarter_split.non_insurance_margin) }}</span>
+                    <span>잡이익: {{ "{:,}".format(q.extra_profit_total) }}</span>
                     {% else %}<span>세부자료 확인 필요</span>{% endif %}
                 </div>
             </div>
@@ -196,6 +197,7 @@
                         <th class="text-end">조제료</th>
                         <th class="text-end">일매순익</th>
                         <th class="text-end">비보험마진</th>
+                        <th class="text-end">잡이익</th>
                         <th class="text-end">전체 합계</th>
                         <th style="width: 140px;" class="text-center">연간 비중</th>
                         <th class="text-end">전월 대비</th>
@@ -217,7 +219,8 @@
                         <td class="text-end">{{ "{:,}".format(month_split.dispensing_fee) }}원</td>
                         <td class="text-end">{{ "{:,}".format(month_split.daily_net_profit) }}원</td>
                         <td class="text-end text-success fw-bold">{{ "{:,}".format(month_split.non_insurance_margin) }}원</td>
-                        {% else %}<td class="text-center text-muted" colspan="3">세부자료 확인 필요</td>{% endif %}
+                        <td class="text-end">{{ "{:,}".format(row.extra_profit_total) }}원</td>
+                        {% else %}<td class="text-center text-muted" colspan="3">세부자료 확인 필요</td><td class="text-end">{{ "{:,}".format(row.extra_profit_total) }}원</td>{% endif %}
                         <td class="text-end fw-bold text-dark fs-6">{{ "{:,}".format(row.grand_total) }}원</td>
                         <td class="text-center">
                             <div class="d-flex align-items-center gap-1">
@@ -261,7 +264,8 @@
                         <td class="text-end"><strong>{{ "{:,}".format(annual_split.dispensing_fee) }}원</strong></td>
                         <td class="text-end"><strong>{{ "{:,}".format(annual_split.daily_net_profit) }}원</strong></td>
                         <td class="text-end"><strong>{{ "{:,}".format(annual_split.non_insurance_margin) }}원</strong></td>
-                        {% else %}<td class="text-center text-muted" colspan="3">세부자료 확인 필요</td>{% endif %}
+                        <td class="text-end"><strong>{{ "{:,}".format(year_total.extra_profit_total) }}원</strong></td>
+                        {% else %}<td class="text-center text-muted" colspan="3">세부자료 확인 필요</td><td class="text-end"><strong>{{ "{:,}".format(year_total.extra_profit_total) }}원</strong></td>{% endif %}
                         <td class="text-end"><strong class="fs-6 text-warning">{{ "{:,}".format(year_total.grand) }}원</strong></td>
                         <td class="text-center"><strong>100%</strong></td>
                         <td class="text-end">
@@ -356,10 +360,10 @@ if (compCtx && chartPayload && annualSplit) {
     new Chart(compCtx, {
         type: 'doughnut',
         data: {
-            labels: ['조제료', '일매순익', '비보험마진'],
+            labels: ['조제료', '일매순익', '비보험마진', '잡이익'],
             datasets: [{
-                data: [annualSplit.dispensing_fee, annualSplit.daily_net_profit, annualSplit.non_insurance_margin],
-                backgroundColor: ['#2563eb', '#10b981', '#f59e0b'],
+                data: [annualSplit.dispensing_fee, annualSplit.daily_net_profit, annualSplit.non_insurance_margin, {{ year_total.extra_profit_total }}],
+                backgroundColor: ['#2563eb', '#10b981', '#f59e0b', '#64748b'],
                 borderWidth: 2
             }]
         },

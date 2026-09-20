@@ -50,11 +50,12 @@ def get_cached_monthly_summary(conn=None, user_id=None):
         rows = conn.execute('''
             SELECT year, month, dispensing_plus_daily_total, non_insurance_total, grand_total, prev_month_diff
             FROM monthly_summary
-            WHERE user_id = ? AND grand_total > 0
+            WHERE user_id = ?
             ORDER BY year, month
         ''', (user_id,)).fetchall()
 
-        data = [dict(r) for r in rows]
+        from extra_profit import monthly_totals, merge_monthly_summaries
+        data = merge_monthly_summaries(rows, monthly_totals(conn, user_id))
         with _CACHE_LOCK:
             if user_id not in _USER_CACHE:
                 _USER_CACHE[user_id] = {}
@@ -197,6 +198,8 @@ def invalidate_user_cache(user_id=None):
 
 # 서버 구동 시 DB 및 스키마 자동 초기화
 init_db()
+from extra_profit import install as install_extra_profit
+install_extra_profit(app)
 
 
 def login_required(f):
@@ -249,7 +252,7 @@ def get_latest_month_summary(user_id, conn=None):
             'diff': int(row['prev_month_diff'] or 0)
         }
     now = datetime.date.today()
-    return {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'grand_total': 0, 'diff': 0}
+    return {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0}
 
 
 def load_analysis_rows(conn, user_id, year, month):
@@ -289,6 +292,10 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
         ''', (user_id, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))).fetchall()
 
     date_map = {r['date']: r for r in rows}
+    extra_map = {r['date']: int(r['amount'] or 0) for r in conn.execute('''
+        SELECT date, SUM(amount) AS amount FROM extra_profit
+        WHERE user_id = ? AND date BETWEEN ? AND ? GROUP BY date
+    ''', (user_id, start_date.isoformat(), end_date.isoformat())).fetchall()}
 
     weeks = []
     prev_week_dict = None
@@ -316,6 +323,7 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
         disp_sum = 0
         daily_sum = 0
         nim_sum = 0
+        extra_sum = 0
         tot_sum = 0
         entered_days = 0
 
@@ -334,6 +342,9 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
                 tot_sum += t
                 if t > 0 or disp > 0:
                     entered_days += 1
+            misc = extra_map.get(d_str, 0)
+            extra_sum += misc
+            tot_sum += misc
             cur_d += datetime.timedelta(days=1)
 
         daily_avg = int(tot_sum / entered_days) if entered_days > 0 else 0
@@ -356,6 +367,7 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
             'daily_sum': daily_sum,
             'disp_plus_daily': disp_sum + daily_sum,
             'nim_sum': nim_sum,
+            'extra_sum': extra_sum,
             'total_sum': tot_sum,
             'entered_days': entered_days,
             'daily_avg': daily_avg,
@@ -378,6 +390,7 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
             target_d = (lw_monday + datetime.timedelta(days=d_off)).strftime('%Y-%m-%d')
             if target_d in date_map:
                 lw_same_period_sum += int(date_map[target_d]['total'] or 0)
+            lw_same_period_sum += extra_map.get(target_d, 0)
 
         this_week['last_week_same_period'] = lw_same_period_sum
         if lw_same_period_sum > 0:
@@ -392,7 +405,8 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
         'labels': [w['week_label'] for w in weeks],
         'totals': [w['total_sum'] for w in weeks],
         'disp_plus_daily': [w['disp_plus_daily'] for w in weeks],
-        'non_insurance': [w['nim_sum'] for w in weeks]
+        'non_insurance': [w['nim_sum'] for w in weeks],
+        'extra_profit_total': [w['extra_sum'] for w in weeks]
     }
 
     return {
@@ -515,18 +529,20 @@ def dashboard():
                 'month': int(last_r['month']),
                 'dispensing_plus_daily': int(last_r['dispensing_plus_daily_total'] or 0),
                 'non_insurance': int(last_r['non_insurance_total'] or 0),
+                'extra_profit_total': int(last_r.get('extra_profit_total') or 0),
                 'grand_total': int(last_r['grand_total'] or 0),
                 'diff': int(last_r['prev_month_diff'] or 0)
             }
         else:
             now_dt = datetime.date.today()
-            current_month = {'year': now_dt.year, 'month': now_dt.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'grand_total': 0, 'diff': 0}
+            current_month = {'year': now_dt.year, 'month': now_dt.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0}
 
         monthly_data = {
             'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
             'totals': [int(r['grand_total']) for r in rows],
             'dispensing_daily': [int(r['dispensing_plus_daily_total']) for r in rows],
-            'non_insurance': [int(r['non_insurance_total']) for r in rows]
+            'non_insurance': [int(r['non_insurance_total']) for r in rows],
+            'extra_profit_total': [int(r.get('extra_profit_total') or 0) for r in rows]
         }
 
         years_data = {}
@@ -843,6 +859,7 @@ def report():
                 'month': mo,
                 'dispensing_plus_daily_total': dpd,
                 'non_insurance_total': nim,
+                'extra_profit_total': int(r.get('extra_profit_total') or 0),
                 'grand_total': gt,
                 'prev_month_diff': diff
             })
@@ -859,6 +876,7 @@ def report():
     report_data.sort(key=lambda x: x['month'])
 
     year_total = {
+        'extra_profit_total': sum(r['extra_profit_total'] for r in report_data),
         'dpd': year_dpd,
         'nim': year_nim,
         'grand': year_grand
@@ -891,10 +909,10 @@ def report():
 
     # 분기별 실적 집계 (Q1~Q4)
     quarters = [
-        {'quarter': 1, 'name': '1분기 (1~3월)', 'months': [1, 2, 3], 'total': 0, 'dpd': 0, 'nim': 0},
-        {'quarter': 2, 'name': '2분기 (4~6월)', 'months': [4, 5, 6], 'total': 0, 'dpd': 0, 'nim': 0},
-        {'quarter': 3, 'name': '3분기 (7~9월)', 'months': [7, 8, 9], 'total': 0, 'dpd': 0, 'nim': 0},
-        {'quarter': 4, 'name': '4분기 (10~12월)', 'months': [10, 11, 12], 'total': 0, 'dpd': 0, 'nim': 0}
+        {'quarter': 1, 'name': '1분기 (1~3월)', 'months': [1, 2, 3], 'total': 0, 'dpd': 0, 'nim': 0, 'extra_profit_total': 0},
+        {'quarter': 2, 'name': '2분기 (4~6월)', 'months': [4, 5, 6], 'total': 0, 'dpd': 0, 'nim': 0, 'extra_profit_total': 0},
+        {'quarter': 3, 'name': '3분기 (7~9월)', 'months': [7, 8, 9], 'total': 0, 'dpd': 0, 'nim': 0, 'extra_profit_total': 0},
+        {'quarter': 4, 'name': '4분기 (10~12월)', 'months': [10, 11, 12], 'total': 0, 'dpd': 0, 'nim': 0, 'extra_profit_total': 0}
     ]
     for r in report_data:
         m = r['month']
@@ -902,6 +920,7 @@ def report():
         quarters[q_idx]['total'] += r['grand_total']
         quarters[q_idx]['dpd'] += r['dispensing_plus_daily_total']
         quarters[q_idx]['nim'] += r['non_insurance_total']
+        quarters[q_idx]['extra_profit_total'] += r['extra_profit_total']
 
     # 연간 줄글 분석 생성
     narrative_paragraphs = generate_annual_narrative_report(
@@ -950,9 +969,7 @@ def export_csv(year):
     pharmacy = session.get('pharmacy_name', '약국')
     conn = get_db()
     try:
-        rows = conn.execute('''
-            SELECT * FROM monthly_summary WHERE user_id = ? AND year = ? ORDER BY month
-        ''', (user_id, year)).fetchall()
+        rows = [r for r in get_cached_monthly_summary(conn, user_id) if int(r['year']) == year]
         from profit_components import load_monthly_components, attach_components
         grouped = load_monthly_components(conn, user_id)
         detailed_rows = attach_components(rows, grouped)
@@ -962,13 +979,14 @@ def export_csv(year):
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([f'[{pharmacy}] {year}년 순익 리포트'])
-    writer.writerow(['연도', '월', '조제료', '일매순익', '비보험마진', '전체합계', '전월대비', '세부자료 상태'])
+    writer.writerow(['연도', '월', '조제료', '일매순익', '비보험마진', '잡이익', '전체합계', '전월대비', '세부자료 상태'])
     for r in detailed_rows:
         known = r['breakdown_available']
         writer.writerow([r['year'], r['month'],
                          r['dispensing_fee'] if known else '',
                          r['daily_net_profit'] if known else '',
                          r['non_insurance_margin'] if known else '',
+                         r['extra_profit_total'],
                          r['grand_total'], r['prev_month_diff'],
                          '확인됨' if known else '세부자료 확인 필요'])
 

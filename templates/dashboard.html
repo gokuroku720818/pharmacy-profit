@@ -7,7 +7,7 @@
 {% set period_diff = month_comparison.diff if month_comparison else none %}
 {% set split = components_for(current_month.year, current_month.month, current_month.dispensing_plus_daily, current_month.non_insurance, current_month.grand_total) %}
 <!-- 요약 카드 -->
-<div class="row row-cols-1 row-cols-md-2 row-cols-xl-5 g-3 mb-4">
+<div class="row row-cols-1 row-cols-md-2 row-cols-xl-6 g-3 mb-4">
     <div class="col">
         <div class="card summary-card bg-primary text-white">
             <div class="card-body">
@@ -32,6 +32,15 @@
                 <div class="card-icon"><i class="fas fa-pills"></i></div>
                 <h6 class="card-subtitle">비보험마진</h6>
                 <h3 class="card-title">{{ "{:,}".format(current_month.non_insurance|default(0, true)) }}원</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card summary-card bg-secondary text-white">
+            <div class="card-body">
+                <div class="card-icon"><i class="fas fa-coins"></i></div>
+                <h6 class="card-subtitle">잡이익 <a class="text-white small" href="/extra-profit?year={{ current_month.year }}&month={{ current_month.month }}">입력</a></h6>
+                <h3 class="card-title">{{ "{:,}".format(current_month.extra_profit_total|default(0, true)) }}원</h3>
             </div>
         </div>
     </div>
@@ -134,6 +143,9 @@
                             <div class="d-flex justify-content-between text-muted mb-1">
                                 <span>비보험마진:</span>
                                 <strong class="text-dark">{{ "{:,}".format(w.nim_sum) }}원</strong>
+                            </div>
+                            <div class="d-flex justify-content-between text-muted mb-1">
+                                <span>잡이익:</span><strong class="text-dark">{{ "{:,}".format(w.extra_sum) }}원</strong>
                             </div>
                             <div class="d-flex justify-content-between text-muted">
                                 <span>영업일/평균:</span>
