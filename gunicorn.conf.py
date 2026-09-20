@@ -1,8 +1,10 @@
 """Single-process threaded deployment keeps existing per-user caches consistent.
 
-Gunicorn loads this file automatically from the working directory even when
-Render's start command supplies its own worker/thread arguments.
+Gunicorn loads this file automatically from the working directory. The
+Procfile and any Render custom start command must also use one worker;
+explicit CLI --workers overrides this default. Four threads remain enabled.
 """
+workers = 1
 worker_class = 'gthread'
 threads = 4
 keepalive = 5
