@@ -1,0 +1,43 @@
+name: Apply incidental-profit integration once
+on:
+  push:
+    branches: [feature-extra-profit-ledger-20260920]
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: "github.event.head_commit.message == 'build: integrate supplemental profit safely'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature-extra-profit-ledger-20260920
+      - name: Apply exact-match changes and show scoped diff
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/apply_extra_profit_integration.py')
+          s=p.read_text(encoding='utf-8')
+          assert 'if found != count:' in s
+          assert 'file.write_bytes(data.replace(before, after))' in s
+          s=s.replace('if found != count:', 'if found < count:')
+          s=s.replace('file.write_bytes(data.replace(before, after))','file.write_bytes(data.replace(before, after, count))')
+          target='"\'non_insurance\': 0, \'grand_total\': 0, \'diff\': 0}", "\'non_insurance\': 0, \'extra_profit_total\': 0, \'grand_total\': 0, \'diff\': 0}", count=1)'
+          assert target in s
+          s=s.replace(target, target.replace('count=1)', 'count=2)'))
+          p.write_text(s, encoding='utf-8')
+          PY
+          python scripts/apply_extra_profit_integration.py
+          git diff --check
+          git diff --stat
+      - name: Commit integrated app only
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- app.py database.py templates/base.html templates/dashboard.html templates/calendar.html templates/report.html static/js/charts.js tests/test_three_profit_http.py
+          git diff --cached --quiet && { echo 'No integration changes'; exit 1; }
+          git commit -m 'feat: integrate incidental profit across financial views'
+          git push origin HEAD:feature-extra-profit-ledger-20260920
