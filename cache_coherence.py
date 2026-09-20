@@ -2,10 +2,10 @@
 
 The existing cache loaders publish their result after releasing _CACHE_LOCK. Merely
 popping the bucket on a write is insufficient when a loader began earlier.
-Serialize each user's loaders with its invalidation in the single-worker Gunicorn
-process; unrelated users retain independent locks. Do not touch SQL, money math,
-or the separate calculator's arithmetic. Cross-process writes still need a shared
-cache/version scheme if deployment worker counts are raised.
+Serialize each user's financial display loaders with its invalidation in the
+single-worker Gunicorn process; unrelated users retain independent locks.
+No database schema, financial calculations, or standalone calculator changes.
+Cross-process writes need a shared version strategy if worker count is raised.
 """
 from functools import wraps
 from inspect import signature
@@ -16,12 +16,11 @@ _USER_READERS = (
     'get_cached_monthly_summary',
     'get_cached_current_month_dailies',
     'get_cached_dow_avg',
-    'get_cached_calculator_settings',
 )
 
 
 def install(module):
-    """Wrap existing cache entrypoints once, before Gunicorn accepts traffic."""
+    """Wrap existing display cache entrypoints once, before Gunicorn traffic."""
     if getattr(module, '_cache_coherence_installed', False):
         return
     registry_guard = Lock()
@@ -54,8 +53,8 @@ def install(module):
             with for_user(user_id), admin_guard:
                 return original_invalidate_user(user_id)
 
-        # An all-users purge must wait for every registered in-flight loader.
-        # Holding the registry prevents new readers from registering mid-purge.
+        # Wait for all existing readers before clearing every user's cache.
+        # New readers cannot register while the all-users purge is in progress.
         with registry_guard:
             active = list(locks.values())
             for lock in active:
