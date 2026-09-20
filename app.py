@@ -18,8 +18,6 @@ import os
 import re
 import time
 import threading
-import openpyxl
-import msoffcrypto
 from urllib.parse import quote
 
 app = Flask(__name__)
@@ -643,12 +641,15 @@ def input_sales():
                      dispensing_plus_daily, non_insurance_margin, total, memo, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
                 ''', (user_id, date_str, dow, dispensing, daily_net, dpd, non_insurance, total, memo))
-                conn.commit()
-
                 recalc_monthly_summary(conn, user_id, dt.year, dt.month)
                 invalidate_user_cache(user_id)
                 flash(f'{date_str} ({dow}) 순익이 저장되었습니다. 합계: {total:,}원', 'success')
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    # A disconnected server cannot roll back; retain the original error.
+                    pass
                 flash(f'저장 실패: {str(e)}', 'danger')
 
             referrer = request.referrer or ''
@@ -1147,6 +1148,7 @@ def save_calculator_settings():
 @login_required
 def download_template():
     """표준 엑셀 양식 다운로드"""
+    import openpyxl
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "일별순익_입력양식"
@@ -1205,9 +1207,11 @@ def upload_excel():
     file_bytes = file.read()
 
     try:
+        import openpyxl
         # 암호화 파일인지 검사
         if file_bytes.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1') or password:
             try:
+                import msoffcrypto
                 decrypted = io.BytesIO()
                 office_file = msoffcrypto.OfficeFile(io.BytesIO(file_bytes))
                 office_file.load_key(password=password or '7581')
@@ -1264,8 +1268,8 @@ def upload_excel():
                     touched_months.add((int(date_str[:4]), int(date_str[5:7])))
 
                 # 변경된 월 통계 자동 재계산
-                for yr, mo in touched_months:
-                    recalc_monthly_summary(conn, user_id, yr, mo)
+                for yr, mo in sorted(touched_months):
+                    recalc_monthly_summary(conn, user_id, yr, mo, commit=False)
 
                 conn.commit()
                 invalidate_user_cache(user_id)
@@ -1381,6 +1385,7 @@ def upload_excel():
             conn.close()
     except Exception as e:
         flash(f'엑셀 가져오기 실패: {str(e)}', 'danger')
+    return redirect(url_for('dashboard'))
 
 # ==========================================
 # 🛡️ 관리자 전용 콘솔 라우트
@@ -1488,6 +1493,7 @@ def admin_delete_user(target_user_id):
 @admin_required
 def admin_export_backup():
     """관리자 전용: 전체 약국 회원 및 순익 데이터 원클릭 엑셀 백업 다운로드"""
+    import openpyxl
     conn = None
     try:
         conn = get_db()
@@ -1560,6 +1566,7 @@ def admin_export_backup():
 
 
 @app.route('/debug/perf')
+@admin_required
 def debug_perf():
     """서버 및 DB 커넥션 풀 성능 실시간 정밀 진단 API"""
     from database import get_pg_pool, get_database_url
@@ -1573,20 +1580,25 @@ def debug_perf():
     conn = get_db()
     steps['get_db_total_sec'] = round(time.time() - t1, 3)
 
-    t2 = time.time()
-    cur = conn.execute("SELECT 1")
-    cur.fetchall()
-    steps['query_select1_sec'] = round(time.time() - t2, 3)
-
-    t3 = time.time()
-    conn.close()
-    steps['conn_close_sec'] = round(time.time() - t3, 3)
+    try:
+        t2 = time.time()
+        cur = conn.execute("SELECT 1")
+        try:
+            cur.fetchall()
+        finally:
+            cur.close()
+        steps['query_select1_sec'] = round(time.time() - t2, 3)
+    finally:
+        t3 = time.time()
+        conn.close()
+        steps['conn_close_sec'] = round(time.time() - t3, 3)
 
     steps['pool_status'] = get_pool_status()
-    steps['cache_stats'] = {
-        'users_cached': len(_USER_CACHE),
-        'cached_user_keys': {uid: list(data.keys()) for uid, data in _USER_CACHE.items()}
-    }
+    with _CACHE_LOCK:
+        steps['cache_stats'] = {
+            'users_cached': len(_USER_CACHE),
+            'cached_user_keys': {uid: list(data.keys()) for uid, data in _USER_CACHE.items()}
+        }
     return jsonify(steps)
 
 

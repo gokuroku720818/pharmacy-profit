@@ -301,3 +301,148 @@ def test_login_success_and_failure_with_synthetic_credentials(service, conn):
     with client.session_transaction() as session:
         assert session['user_id'] == 1
     assert client.get('/').status_code == 200
+
+
+def test_daily_save_rolls_back_when_month_summary_fails(service, conn):
+    add(conn, '2026-09-19', disp=100)
+    service.recalc_monthly_summary(conn, 1, 2026, 9)
+    conn.execute("""CREATE TRIGGER fail_summary BEFORE INSERT ON monthly_summary
+        BEGIN SELECT RAISE(ABORT, 'injected summary failure'); END""")
+    conn.commit()
+    response = client_for(service).post('/input', data={
+        'date': '2026-09-19', 'dispensing_fee': '999',
+        'daily_net_profit': '20', 'non_insurance_margin': '10'})
+    assert response.status_code == 302
+    assert conn.execute("SELECT total FROM daily_profit WHERE date='2026-09-19'").fetchone()['total'] == 130
+    assert conn.execute('SELECT grand_total FROM monthly_summary').fetchone()['grand_total'] == 130
+
+
+def excel_bytes(rows):
+    import io
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active.append(['날짜', '요일', '조제료', '일매순익', '비보험', '메모'])
+    for row in rows:
+        wb.active.append(row)
+    output = io.BytesIO()
+    wb.save(output)
+    wb.close()
+    output.seek(0)
+    return output
+
+
+def test_excel_failure_rolls_back_all_months_and_returns_page(service, conn):
+    conn.execute("""CREATE TRIGGER fail_second_month BEFORE INSERT ON monthly_summary
+        WHEN (SELECT COUNT(*) FROM monthly_summary) > 0
+        BEGIN SELECT RAISE(ABORT, 'injected second month failure'); END""")
+    conn.commit()
+    response = client_for(service).post('/upload_excel', data={'excel_file': (
+        excel_bytes([['2026-08-01', '토', 100, 20, 10], ['2026-09-01', '화', 200, 30, 10]]), 'test.xlsx')})
+    assert conn.execute('SELECT COUNT(*) FROM daily_profit').fetchone()[0] == 0
+    assert conn.execute('SELECT COUNT(*) FROM monthly_summary').fetchone()[0] == 0
+    assert response.status_code == 302
+
+
+def test_invalid_excel_returns_error_message_instead_of_500(service):
+    import io
+    response = client_for(service).post('/upload_excel', data={
+        'excel_file': (io.BytesIO(b'not an excel file'), 'broken.xlsx')}, follow_redirects=True)
+    assert response.status_code == 200
+    assert '엑셀 가져오기 실패' in response.get_data(as_text=True)
+
+
+def test_edit_previous_month_refreshes_next_month_difference(service, conn):
+    add(conn, '2026-08-01', disp=100, daily=0, nim=0)
+    add(conn, '2026-09-01', disp=300, daily=0, nim=0)
+    service.recalc_monthly_summary(conn, 1, 2026, 8)
+    service.recalc_monthly_summary(conn, 1, 2026, 9)
+    response = client_for(service).post('/input', data={'date':'2026-08-01', 'dispensing_fee':'200'})
+    assert response.status_code == 302
+    row = conn.execute('SELECT prev_month_diff FROM monthly_summary WHERE month=9').fetchone()
+    assert row['prev_month_diff'] == 100
+
+
+def test_diagnostics_require_admin(service):
+    assert service.app.test_client().get('/debug/perf').status_code == 302
+    assert client_for(service).get('/debug/perf').status_code == 302
+
+
+def test_login_startup_does_not_import_excel_dependencies(tmp_path):
+    import os
+    import subprocess
+    code = '''
+import sys, importlib.abc
+class BlockExcel(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('openpyxl', 'msoffcrypto'):
+            raise ImportError('Excel must not load during login startup')
+sys.meta_path.insert(0, BlockExcel())
+import database
+database.SQLITE_PATH = sys.argv[1]
+import app
+assert app.app.test_client().get('/login').status_code == 200
+'''
+    env = dict(os.environ)
+    env.pop('DATABASE_URL', None)
+    result = subprocess.run([sys.executable, '-c', code, str(tmp_path / 'startup.db')],
+                            capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_diagnostics_return_connection_on_query_failure(service, conn, monkeypatch):
+    conn.set_authorizer(lambda *args: sqlite3.SQLITE_DENY)
+    monkeypatch.setattr(service, 'get_db', lambda: conn)
+    with service.app.test_request_context('/debug/perf'):
+        service.session.update(user_id=1, username='admin')
+        with pytest.raises(sqlite3.DatabaseError):
+            service.debug_perf()
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        conn.execute('SELECT 1')
+
+
+def test_standard_excel_commits_once_and_refreshes_cached_totals(service, conn, monkeypatch):
+    statements = []
+    original = service.get_db
+    def tracked():
+        c = original()
+        c.set_trace_callback(statements.append)
+        return c
+    monkeypatch.setattr(service, 'get_db', tracked)
+    assert service.get_cached_monthly_summary(conn, 1) == []
+    response = client_for(service).post('/upload_excel', data={'excel_file': (
+        excel_bytes([['2026-09-01', '화', 200, 30, 10], ['2026-08-01', '토', 100, 20, 10]]), 'test.xlsx')})
+    assert response.status_code == 302
+    assert sum(s.strip().upper() == 'COMMIT' for s in statements) == 1
+    rows = service.get_cached_monthly_summary(conn, 1)
+    assert [r['grand_total'] for r in rows] == [130, 240]
+    assert rows[1]['prev_month_diff'] == 110
+    assert conn.execute('SELECT COUNT(*) FROM daily_profit').fetchone()[0] == 2
+
+
+def test_excel_downloads_still_open_after_lazy_import(service):
+    import io
+    import openpyxl
+    client = client_for(service)
+    with client.session_transaction() as session:
+        session['username'] = 'admin'
+    for url in ('/download_template', '/admin/export_backup'):
+        response = client.get(url)
+        assert response.status_code == 200
+        workbook = openpyxl.load_workbook(io.BytesIO(response.data))
+        assert workbook.active.max_row >= 1
+        workbook.close()
+
+
+def test_lost_connection_during_save_preserves_failure_response(service, monkeypatch):
+    import database
+    class Disconnected:
+        def execute(self, *args):
+            raise database.psycopg2.OperationalError('connection lost during save')
+        def rollback(self):
+            raise database.psycopg2.InterfaceError('connection already closed')
+        def close(self):
+            pass
+    monkeypatch.setattr(service, 'get_db', Disconnected)
+    response = client_for(service).post('/input', data={
+        'date': '2026-09-19', 'dispensing_fee': '100'})
+    assert response.status_code == 302
