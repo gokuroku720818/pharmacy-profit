@@ -27,7 +27,9 @@ def postgres_pool(monkeypatch):
         pool = database._pg_pool
         if pool is not None:
             pool.closeall()
-        monkeypatch.setattr(database, '_pg_pool', previous_pool)
+        # Assign directly: using monkeypatch.setattr in fixture teardown would be
+        # reversed *after* this fixture, restoring the just-closed pool.
+        database._pg_pool = previous_pool
         with database._pg_usage_lock:
             database._pg_last_used.clear()
 
