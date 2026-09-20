@@ -10,6 +10,9 @@ def _recent_dates(response):
 
 
 def test_dashboard_preload_preserves_last_twenty_across_month_boundary(service, conn):
+    conn.execute('INSERT INTO users (id, username, password_hash, pharmacy_name) VALUES (?, ?, ?, ?)',
+                 (2, 'test-history-other-user', 'test-only', 'Other test pharmacy'))
+    conn.commit()
     for day in range(13, 32):
         add(conn, f'2026-08-{day:02d}', user=1)
     for day in (1, 2):
