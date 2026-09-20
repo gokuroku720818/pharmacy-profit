@@ -30,14 +30,14 @@ def load_monthly_components(conn, user_id):
     }
 
 
-def attach_components(summary_rows, grouped):
-    """Preserve monthly totals and split only when independent components reconcile.
+def attach_components(summary_rows, grouped, *, present_source=False):
+    """Attach source-derived component amounts without modifying ledger totals.
 
-    Historical daily ``total`` is a separate imported Excel cell, not the
-    authoritative sum of independently stored component cells. A discrepancy
-    in that one redundant field must not hide a three-way split whose actual
-    component sums *and* monthly displayed total all reconcile. If any of
-    those authoritative checks fail, continue showing unknown components.
+    The default strict mode leaves unverified splits unknown (e.g. for legacy
+    exports). UI may opt into present_source to show *actual daily-source sums*
+    even when independently imported monthly totals disagree. Callers must
+    disclose the provenance and discrepancy; the source values are never
+    presented as a mathematically reconciled split in this mode.
     """
     details = []
     for summary in summary_rows:
@@ -51,18 +51,22 @@ def attach_components(summary_rows, grouped):
                         source['dispensing_fee'] + source['daily_net_profit'] == combined and
                         source['non_insurance_margin'] == nim and
                         combined + nim + extra == grand)
+        available = verified or (present_source and source is not None)
         item['extra_profit_total'] = extra
-        item['breakdown_available'] = verified
-        if verified:
-            item.update({key: source[key] for key in COMPONENT_KEYS})
-        else:
-            item.update({key: None for key in COMPONENT_KEYS})
+        item['breakdown_available'] = available
+        item['breakdown_verified'] = verified
+        item['breakdown_source'] = '일별 기록 기준' if source is not None else None
+        item['breakdown_difference'] = (
+            grand - extra - sum(int(source[key]) for key in COMPONENT_KEYS)
+            if source is not None else None
+        )
+        item.update({key: int(source[key]) if available else None for key in COMPONENT_KEYS})
         details.append(item)
     return details
 
 
 def total_components(rows):
-    """Only report a whole-period three-way split when all months reconcile."""
+    """Only total a whole period when every month has actual source figures."""
     if not rows or any(not row['breakdown_available'] for row in rows):
         return None
     return {key: sum(int(row[key]) for row in rows) for key in COMPONENT_KEYS}
