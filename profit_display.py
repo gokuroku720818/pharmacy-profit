@@ -7,7 +7,7 @@ Standalone Flask test apps keep uncached, isolated behavior.
 import sys
 import time
 
-from flask import current_app, g, make_response, redirect, render_template_string, session, url_for
+from flask import current_app, flash, g, make_response, redirect, render_template_string, request, session, url_for
 from database import get_db
 from extra_profit import merge_monthly_summaries, monthly_totals
 from profit_components import attach_components, load_monthly_components, total_components
@@ -91,12 +91,12 @@ def install(app):
                    'dispensing_plus_daily_total': combined,
                    'non_insurance_total': non_insurance,
                    'grand_total': grand}
-            return attach_components(annotate([row]), grouped())[0]
+            return attach_components(annotate([row]), grouped(), present_source=True)[0]
 
         def period_components(year, rows, months=None):
             subset = [dict(row, year=int(year)) for row in rows
                       if months is None or int(row['month']) in months]
-            return total_components(attach_components(annotate(subset), grouped()))
+            return total_components(attach_components(annotate(subset), grouped(), present_source=True))
 
         def three_way_series(labels, combined, non_insurance, totals):
             series = {'labels': list(labels), 'dispensing_fee': [],
@@ -111,6 +111,20 @@ def install(app):
                     series[field].append(split[field])
                 series['extra_profit_total'].append(split['extra_profit_total'])
             return series
+
+        # The existing shared base template renders flash messages before its content.
+        # Announce provenance on financial screens whenever independently imported
+        # ledgers disagree. All reads reuse existing per-user caches and never write.
+        module = _cache_module()
+        if module is not None and request.path in ('/', '/dashboard', '/calendar', '/report', '/trend'):
+            summaries = module.get_cached_monthly_summary(None, session['user_id'])
+            source_rows = grouped()
+            if any((int(row['year']), int(row['month'])) in source_rows and
+                   not row['breakdown_available']
+                   for row in attach_components(summaries, source_rows)):
+                flash('주의: 조제료·일매순익·비보험마진은 일별 기록 기준 금액입니다. '
+                      '과거 월장부의 전체 합계와 다를 수 있으므로 합산하지 마세요. '
+                      '차액은 /reconciliation 월별 대조 화면에서 확인하세요.', 'warning')
 
         return {'components_for': components_for,
                 'period_components': period_components,
