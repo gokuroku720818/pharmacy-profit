@@ -2,7 +2,7 @@
 
 monthly_summary historically stores dispensing + OTC combined; some Excel imports
 have only that aggregate and no daily source records. Never invent a split.
-This module does not mutate tables, calculator settings or monetary formulas.
+Miscellaneous gains live in a separate ledger and affect the DISPLAY grand total.
 """
 
 
@@ -31,10 +31,10 @@ def load_monthly_components(conn, user_id):
 
 
 def attach_components(summary_rows, grouped):
-    """Copy summaries, adding components ONLY when source sums exactly match.
+    """Preserve totals, showing three source-derived values only when verified.
 
-    None denotes unavailable/contradictory historical breakdown; it is not
-    numeric zero. Report totals remain the stored monthly grand_total.
+    The supplemental ledger adds to grand_total but never disguises an absent
+    or contradictory historical three-way breakdown as a known value.
     """
     details = []
     for summary in summary_rows:
@@ -43,11 +43,13 @@ def attach_components(summary_rows, grouped):
         combined = int(item['dispensing_plus_daily_total'] or 0)
         nim = int(item['non_insurance_total'] or 0)
         grand = int(item['grand_total'] or 0)
+        extra = int(item.get('extra_profit_total') or 0)
         verified = bool(source is not None and
                         source['dispensing_fee'] + source['daily_net_profit'] == combined and
                         source['non_insurance_margin'] == nim and
-                        source['grand_total'] == grand and
-                        combined + nim == grand)
+                        source['grand_total'] == grand - extra and
+                        combined + nim + extra == grand)
+        item['extra_profit_total'] = extra
         item['breakdown_available'] = verified
         if verified:
             item.update({key: source[key] for key in COMPONENT_KEYS})

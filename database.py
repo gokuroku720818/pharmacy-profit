@@ -268,6 +268,25 @@ def init_db():
             user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             settings_json TEXT NOT NULL
         )""")
+        if is_postgres():
+            conn.execute("""CREATE TABLE IF NOT EXISTS extra_profit (
+                id BIGSERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                date TEXT NOT NULL,
+                amount BIGINT NOT NULL CHECK (amount > 0),
+                memo TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+        else:
+            conn.execute("""CREATE TABLE IF NOT EXISTS extra_profit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                date TEXT NOT NULL,
+                amount BIGINT NOT NULL CHECK (amount > 0),
+                memo TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""")
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_extra_profit_user_date ON extra_profit(user_id, date)')
         conn.commit()
     finally:
         conn.close()
@@ -607,9 +626,11 @@ def get_all_users_stats():
                 COUNT(d.id) as total_entries,
                 MIN(d.date) as min_date,
                 MAX(d.date) as max_date,
-                COALESCE(SUM(d.total), 0) as total_profit
+                COALESCE(SUM(d.total), 0) + COALESCE(MAX(x.misc_total), 0) as total_profit
             FROM users u
             LEFT JOIN daily_profit d ON u.id = d.user_id
+            LEFT JOIN (SELECT user_id, SUM(amount) AS misc_total FROM extra_profit GROUP BY user_id) x
+                ON x.user_id = u.id
             GROUP BY u.id, u.username, u.pharmacy_name, u.created_at
             ORDER BY u.id ASC
         ''').fetchall()

@@ -12,6 +12,7 @@ def test_context_functions_reuse_one_query_and_hide_unknown(monkeypatch):
         dispensing_fee INTEGER, daily_net_profit INTEGER,
         non_insurance_margin INTEGER, total INTEGER)''')
     conn.execute("INSERT INTO daily_profit VALUES (1, '2026-08-01', 120, 70, 30, 220)")
+    conn.execute('CREATE TABLE extra_profit (user_id INTEGER, date TEXT, amount INTEGER)')
     conn.commit()
     calls = []
 
@@ -39,7 +40,7 @@ def test_context_functions_reuse_one_query_and_hide_unknown(monkeypatch):
         assert chart['daily_net_profit'] == [70, None]
         assert helpers['period_components'](2026, [{'month': 8, 'dispensing_plus_daily_total': 190,
                                                       'non_insurance_total': 30, 'grand_total': 220}])['dispensing_fee'] == 120
-        assert len(calls) == 1
+        assert len(calls) == 2  # daily + miscellaneous source, each reused
     conn.close()
 
 

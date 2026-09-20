@@ -33,7 +33,7 @@
 
 {% set split = components_for(year, month, (month_summary.dispensing_plus_daily_total or 0) if month_summary else 0, (month_summary.non_insurance_total or 0) if month_summary else 0, (month_summary.grand_total or 0) if month_summary else 0) %}
 <!-- 당월 요약 및 AI 월말 예측 배너 -->
-<div class="row row-cols-1 row-cols-md-2 row-cols-xl-4 g-2 mb-3">
+<div class="row row-cols-1 row-cols-md-2 row-cols-xl-5 g-2 mb-3">
     <div class="col">
         <div class="card p-3 border-0 bg-primary text-white shadow-sm">
             <small class="opacity-75">현재 누적 순익 ({{ total_days_worked }}일)</small>
@@ -59,6 +59,9 @@
         </div>
     </div>
 </div>
+<div class="mb-3"><a class="btn btn-outline-secondary btn-sm" href="/extra-profit?year={{ year }}&month={{ month }}">
+    잡이익 {{ "{:,}".format((month_summary.extra_profit_total or 0) if month_summary else 0) }}원 · 입력/수정
+</a></div>
 {% include '_forecast.html' %}
 {% include '_business_schedule.html' %}
 

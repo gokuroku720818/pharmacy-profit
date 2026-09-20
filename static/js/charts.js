@@ -71,6 +71,14 @@ function initDashboardCharts(monthlyData, currentMonth, yearCompare) {
                     borderDash: [3, 3],
                     tension: 0.3,
                     pointRadius: 0
+                }, {
+                    label: '잡이익',
+                    data: monthlyData.extra_profit_total,
+                    borderColor: COLORS.info,
+                    backgroundColor: 'transparent',
+                    borderDash: [2, 5],
+                    tension: 0.3,
+                    pointRadius: 0
                 }]
             },
             options: {
@@ -92,10 +100,10 @@ function initDashboardCharts(monthlyData, currentMonth, yearCompare) {
         new Chart(compCtx, {
             type: 'doughnut',
             data: {
-                labels: ['조제료', '일매순익', '비보험마진'],
+                labels: ['조제료', '일매순익', '비보험마진', '잡이익'],
                 datasets: [{
-                    data: [currentMonth.dispensing_fee, currentMonth.daily_net_profit, currentMonth.non_insurance_margin],
-                    backgroundColor: [COLORS.primary, COLORS.success, COLORS.warning],
+                    data: [currentMonth.dispensing_fee, currentMonth.daily_net_profit, currentMonth.non_insurance_margin, currentMonth.extra_profit_total],
+                    backgroundColor: [COLORS.primary, COLORS.success, COLORS.warning, COLORS.info],
                     borderWidth: 2
                 }]
             },

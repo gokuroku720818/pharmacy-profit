@@ -243,13 +243,19 @@ def test_dashboard_query_budget_and_fresh_values(service, conn, monkeypatch):
     client = client_for(service)
     response = client.get('/')
     assert response.status_code == 200
-    assert len(statements) <= 3, statements
+    base_queries = [sql for sql in statements if 'extra_profit' not in sql]
+    misc_queries = [sql for sql in statements if 'extra_profit' in sql]
+    assert len(base_queries) <= 3, statements
+    assert len(misc_queries) <= 2, statements
     statements.clear()
     conn.execute("UPDATE daily_profit SET total=99999 WHERE user_id=1 AND date='2026-09-19'")
     conn.commit()
     response = client.get('/')
     assert '99,999' in response.get_data(as_text=True)
-    assert len(statements) <= 2, statements
+    base_queries = [sql for sql in statements if 'extra_profit' not in sql]
+    misc_queries = [sql for sql in statements if 'extra_profit' in sql]
+    assert len(base_queries) <= 2, statements
+    assert len(misc_queries) <= 1, statements
 
 
 def test_login_needs_no_external_render_dependencies(service):
