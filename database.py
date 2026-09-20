@@ -541,8 +541,8 @@ def init_postgres_db(db_url):
     print("PostgreSQL 클라우드 DB 준비 완료")
 
 
-def recalc_monthly_summary(conn, user_id, year, month):
-    """특정 사용자의 특정 월 합계를 재계산"""
+def recalc_monthly_summary(conn, user_id, year, month, commit=True):
+    """월 합계 갱신. 일괄 가져오기는 호출자가 전체 트랜잭션을 커밋한다."""
     try:
         cursor = conn.cursor()
         date_prefix = f"{year}-{month:02d}"
@@ -581,7 +581,14 @@ def recalc_monthly_summary(conn, user_id, year, month):
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (user_id, year, month, dpd, nim, gt, diff))
 
-        conn.commit()
+        # 과거 월 수정 시 다음 달의 전월 대비 금액도 같은 트랜잭션에서 갱신.
+        next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+        cursor.execute('''
+            UPDATE monthly_summary SET prev_month_diff = grand_total - ?
+            WHERE user_id = ? AND year = ? AND month = ?
+        ''', (gt, user_id, next_year, next_month))
+        if commit:
+            conn.commit()
     except Exception as e:
         try:
             conn.rollback()
