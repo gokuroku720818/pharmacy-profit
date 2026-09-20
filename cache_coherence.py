@@ -1,10 +1,10 @@
-"""Keep an in-flight user cache read from repopulating a completed invalidation.
+"""Keep in-flight financial reads from repopulating invalidated user caches.
 
-The existing cache loaders publish their result after releasing _CACHE_LOCK. Merely
+The existing cache loaders publish results after releasing _CACHE_LOCK. Merely
 popping the bucket on a write is insufficient when a loader began earlier.
-Serialize each user's financial display loaders with its invalidation in the
-single-worker Gunicorn process; unrelated users retain independent locks.
-No database schema, financial calculations, or standalone calculator changes.
+Serialize user-scoped financial readers AND the dashboard/input GET paths that
+publish input_cache in one threaded Gunicorn worker. Unrelated users retain
+independent locks. No financial calculations or standalone calculator changes.
 Cross-process writes need a shared version strategy if worker count is raised.
 """
 from functools import wraps
@@ -20,7 +20,7 @@ _USER_READERS = (
 
 
 def install(module):
-    """Wrap existing display cache entrypoints once, before Gunicorn traffic."""
+    """Wrap cache entrypoints and financial page reads once, before traffic."""
     if getattr(module, '_cache_coherence_installed', False):
         return
     registry_guard = Lock()
@@ -28,6 +28,12 @@ def install(module):
     admin_guard = RLock()
 
     def for_user(user_id):
+        # An already-held user RLock must never need registry_guard again:
+        # an all-user purge acquires registry_guard before waiting for user
+        # locks, and nested page/helper calls must not invert that order.
+        existing = locks.get(user_id)
+        if existing is not None:
+            return existing
         with registry_guard:
             return locks.setdefault(user_id, RLock())
 
@@ -45,6 +51,24 @@ def install(module):
 
         setattr(module, name, make_reader(original, params))
 
+    # The dashboard and /input GET each publish an input_cache entry AFTER
+    # several queries. Without covering the whole request, a concurrent
+    # committed write can invalidate and then have that stale entry restored.
+    from flask import request, session
+    for endpoint in ('dashboard', 'input_sales'):
+        original_view = module.app.view_functions[endpoint]
+
+        def make_page(fn):
+            @wraps(fn)
+            def synchronized_page(*args, **kwargs):
+                if request.method != 'GET' or 'user_id' not in session:
+                    return fn(*args, **kwargs)
+                with for_user(session['user_id']):
+                    return fn(*args, **kwargs)
+            return synchronized_page
+
+        module.app.view_functions[endpoint] = make_page(original_view)
+
     original_invalidate_user = module.invalidate_user_cache
 
     @wraps(original_invalidate_user)
@@ -53,8 +77,8 @@ def install(module):
             with for_user(user_id), admin_guard:
                 return original_invalidate_user(user_id)
 
-        # Wait for all existing readers before clearing every user's cache.
-        # New readers cannot register while the all-users purge is in progress.
+        # Wait for every registered reader. Newly registered users cannot
+        # enter while the registry is held. Nested reads use the fast path.
         with registry_guard:
             active = list(locks.values())
             for lock in active:
