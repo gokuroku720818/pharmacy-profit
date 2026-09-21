@@ -38,7 +38,7 @@ def test_annual_composition_uses_daily_components_plus_extras_not_ledger(service
     assert '일매순익: <strong>16.7%' in html
     assert '비보험마진: <strong>8.3%' in html
     assert '잡이익: <strong>8.3%' in html
-    assert '일별 기록+잡이익 기준 합계' in html
-    assert '월장부 전체순익' in html
+    assert '세 수익 항목+잡이익 합계' in html
+    assert '일별 total+잡이익 월합계' in html
     assert '1,050원' in html and '600원' in html
     assert conn.execute('SELECT grand_total FROM monthly_summary WHERE user_id=1 AND month=8').fetchone()[0] == 1000

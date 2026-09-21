@@ -149,7 +149,7 @@ table{border-collapse:collapse;width:100%;white-space:nowrap}th,td{padding:10px;
 <h1>일장부 자동 월별 합계</h1>
 <p>공식 전체합계 = 해당 월 일별 total 합계 + 별도 입력 잡이익. 조제료·일매순익·비보험마진은
 일별 각 항목을 따로 합산합니다. 일별 total과 세 항목의 합계가 다를 경우 차액을 별도 표시하며
-이를 잡이익으로 임의 편입하지 않습니다. 이전 월장부 원본은 삭제하거나 수정하지 않았고 공식 계산에는 사용하지 않습니다.</p>
+이를 잡이익으로 임의 편입하지 않습니다. 월별 합계는 일별 기록으로 자동 생성되며 별도로 입력하는 월별 장부는 없습니다.</p>
 <div class="wrap"><table><thead><tr><th>월</th><th>입력일수</th><th>조제료</th><th>일매순익</th>
 <th>비보험마진</th><th>일별 total 합계</th><th>잡이익</th><th>공식 월합계</th>
 <th>일별 total-세 항목 차이</th></tr></thead><tbody>

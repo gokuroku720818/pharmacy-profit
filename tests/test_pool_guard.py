@@ -5,6 +5,9 @@ from types import SimpleNamespace
 import pytest
 import database
 
+if database.psycopg2 is None:
+    pytest.skip("psycopg2 is not installed (PostgreSQL-only tests)", allow_module_level=True)
+
 
 def test_exhausted_pool_never_opens_unpooled_connection(monkeypatch):
     try:

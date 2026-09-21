@@ -202,6 +202,28 @@ from extra_profit import install as install_extra_profit
 install_extra_profit(app)
 
 
+def bootstrap_app_extensions(app_module=None):
+    """로컬 실행 및 운영 환경(Gunicorn) 모두에서 일관된 보안 헤더, 연결 풀 가드,
+    일장부 전용 회계 락, 캐시 정합성 및 성능 메트릭 확장을 적용합니다."""
+    import sys
+    current_module = app_module or sys.modules[__name__]
+    from response_security import install as install_response_security
+    from pool_guard import install as install_pool_guard
+    from daily_only import install as install_daily_only
+    from daily_labels import install as install_daily_labels
+    from cache_coherence import install as install_cache_coherence
+    from runtime_metrics import install as install_metrics
+    import database
+
+    install_response_security(current_module.app)
+    install_pool_guard(database, current_module.app)
+    install_daily_only(current_module)
+    install_daily_labels(current_module)
+    install_cache_coherence(current_module)
+    install_metrics(current_module)
+
+
+
 def login_required(f):
     """로그인 필수 데코레이터"""
     @wraps(f)
@@ -1657,6 +1679,7 @@ def internal_server_error(e):
 
 if __name__ == '__main__':
     init_db()
+    bootstrap_app_extensions()
     print("\n=== 약국 순익 관리 시스템 (다중 약국 온라인 SaaS) 시작 ===")
     print("접속 주소: http://localhost:5000\n")
     app.run(debug=True, host='0.0.0.0', port=5000)

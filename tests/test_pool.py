@@ -2,6 +2,9 @@
 import pytest
 import database
 
+if database.psycopg2 is None:
+    pytest.skip("psycopg2 is not installed (PostgreSQL-only tests)", allow_module_level=True)
+
 class Connection:
     __slots__ = ('closed', 'pings', 'bad', 'cursor_closed', '__weakref__')
     def __init__(self, bad=False):
