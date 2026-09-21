@@ -25,6 +25,8 @@ def install(app):
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
             response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        else:
+            response.headers['Cache-Control'] = 'public, max-age=86400, stale-while-revalidate=604800'
         return response
 
     app.extensions['response_security_installed'] = True

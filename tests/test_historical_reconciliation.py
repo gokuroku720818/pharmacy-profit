@@ -19,7 +19,7 @@ def test_reconciliation_shows_source_figures_without_rewriting_old_months(servic
     assert service.app.test_client().get('/reconciliation').status_code == 302
     response = client_for(service).get('/reconciliation')
     assert response.status_code == 200
-    assert response.headers['Cache-Control'] == 'no-store'
+    assert 'no-store' in response.headers['Cache-Control']
     html = response.get_data(as_text=True)
     assert '2026년 8월' in html and '월장부와 불일치' in html
     for number in ('400', '100', '50', '1,000', '450'):

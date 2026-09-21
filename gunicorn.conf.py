@@ -7,7 +7,7 @@ explicit CLI --workers overrides this default. Four threads remain enabled.
 workers = 1
 worker_class = 'gthread'
 threads = 4
-keepalive = 5
+keepalive = 65
 
 
 def post_worker_init(worker):

@@ -200,6 +200,10 @@ def invalidate_user_cache(user_id=None):
 init_db()
 from extra_profit import install as install_extra_profit
 install_extra_profit(app)
+from response_security import install as install_response_security
+install_response_security(app)
+from response_compress import install as install_response_compress
+install_response_compress(app)
 
 
 def bootstrap_app_extensions(app_module=None):
@@ -208,6 +212,7 @@ def bootstrap_app_extensions(app_module=None):
     import sys
     current_module = app_module or sys.modules[__name__]
     from response_security import install as install_response_security
+    from response_compress import install as install_response_compress
     from pool_guard import install as install_pool_guard
     from daily_only import install as install_daily_only
     from daily_labels import install as install_daily_labels
@@ -216,6 +221,7 @@ def bootstrap_app_extensions(app_module=None):
     import database
 
     install_response_security(current_module.app)
+    install_response_compress(current_module.app)
     install_pool_guard(database, current_module.app)
     install_daily_only(current_module)
     install_daily_labels(current_module)
