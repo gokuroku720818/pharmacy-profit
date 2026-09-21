@@ -3,7 +3,7 @@ services:
     name: pharmacy-profit-manager
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --threads 4 --worker-class gthread
+    startCommand: gunicorn -c gunicorn.conf.py app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
