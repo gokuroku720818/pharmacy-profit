@@ -33,3 +33,10 @@ def test_ci_smoke_exercises_default_worker_count_instead_of_masking_it():
     workflow = (ROOT / '.github' / 'workflows' / 'tests.yml').read_text(encoding='utf-8')
     assert 'gunicorn -c gunicorn.conf.py -b 127.0.0.1:8765 app:app' in workflow
     assert 'gunicorn -c gunicorn.conf.py -w 1 ' not in workflow
+
+
+def test_all_production_start_commands_load_gunicorn_config_hooks():
+    procfile = (ROOT / 'Procfile').read_text(encoding='utf-8')
+    render = (ROOT / 'render.yaml').read_text(encoding='utf-8')
+    assert 'gunicorn -c gunicorn.conf.py app:app' in procfile
+    assert 'startCommand: gunicorn -c gunicorn.conf.py app:app' in render
