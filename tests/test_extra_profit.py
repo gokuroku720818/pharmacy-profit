@@ -78,7 +78,12 @@ def test_misc_requires_login_csrf_and_valid_date_amount_and_memo(service,conn):
     token=_token(client)
     for item in ({'csrf_token':'wrong','date':'2026-09-01','amount':'100','memo':'x'},
                  {'csrf_token':token,'date':'2026-02-30','amount':'100','memo':'x'},
-                 {'csrf_token':token,'date':'2026-09-01','amount':'-5','memo':'x'},
+                 {'csrf_token':token,'date':'2026-09-01','amount':'0','memo':'x'},
+                 {'csrf_token':token,'date':'2026-09-01','amount':'abc','memo':'x'},
                  {'csrf_token':token,'date':'2026-09-01','amount':'100','memo':'   '}):
         assert client.post('/extra-profit',data=item).status_code==400
     assert conn.execute('SELECT COUNT(*) AS n FROM extra_profit').fetchone()['n']==0
+    # 음수 금액 정상 등록 검증
+    res_neg = client.post('/extra-profit', data={'csrf_token':token,'date':'2026-09-01','amount':'-500','memo':'음수잡이익'})
+    assert res_neg.status_code == 302
+    assert conn.execute('SELECT amount FROM extra_profit WHERE user_id=1').fetchone()['amount'] == -500

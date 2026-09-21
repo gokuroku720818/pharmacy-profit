@@ -60,11 +60,11 @@ def _validate():
     date = datetime.date.fromisoformat(raw_date)
     if not (2000 <= date.year <= 2100):
         raise ValueError('날짜 범위를 확인해 주세요.')
-    if not re.fullmatch(r'\d{1,13}', raw_amount):
-        raise ValueError('금액은 양의 정수로 입력해 주세요.')
+    if not re.fullmatch(r'[+-]?\d{1,13}', raw_amount):
+        raise ValueError('금액은 정수로 입력해 주세요.')
     amount = int(raw_amount)
-    if not 1 <= amount <= 1_000_000_000_000:
-        raise ValueError('금액 범위를 확인해 주세요.')
+    if not (-1_000_000_000_000 <= amount <= 1_000_000_000_000) or amount == 0:
+        raise ValueError('금액은 0을 제외한 유효한 범위로 입력해 주세요.')
     if not 1 <= len(memo) <= 200:
         raise ValueError('내용은 1~200자로 입력해 주세요.')
     return date.isoformat(), amount, memo

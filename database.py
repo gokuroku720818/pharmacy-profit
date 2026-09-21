@@ -273,23 +273,109 @@ def init_db():
                 id BIGSERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 date TEXT NOT NULL,
-                amount BIGINT NOT NULL CHECK (amount > 0),
+                amount BIGINT NOT NULL CHECK (amount != 0),
                 memo TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
+            try:
+                conn.execute("ALTER TABLE extra_profit DROP CONSTRAINT IF EXISTS extra_profit_amount_check")
+                conn.execute("ALTER TABLE extra_profit ADD CONSTRAINT extra_profit_amount_check CHECK (amount != 0)")
+            except Exception:
+                pass
         else:
+            # SQLite: 기존 테이블이 있고 데이터가 0건이면 재생성하여 amount != 0 제약조건 반영
+            count_row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='extra_profit'").fetchone()
+            if count_row and (count_row[0] if isinstance(count_row, tuple) else count_row['COUNT(*)']) > 0:
+                data_cnt = conn.execute("SELECT COUNT(*) FROM extra_profit").fetchone()
+                cnt = data_cnt[0] if isinstance(data_cnt, tuple) else data_cnt['COUNT(*)']
+                if cnt == 0:
+                    conn.execute("DROP TABLE IF EXISTS extra_profit")
             conn.execute("""CREATE TABLE IF NOT EXISTS extra_profit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 date TEXT NOT NULL,
-                amount BIGINT NOT NULL CHECK (amount > 0),
+                amount BIGINT NOT NULL CHECK (amount != 0),
                 memo TEXT NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )""")
         conn.execute('CREATE INDEX IF NOT EXISTS idx_extra_profit_user_date ON extra_profit(user_id, date)')
+        seed_extra_profit(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def seed_extra_profit(conn):
+    """엑셀 순익표_최종 Sheet1 36, 37행의 잡이익 38건 자동 시딩 (멱등성 보장)"""
+    if os.environ.get('PYTEST_CURRENT_TEST'):
+        return
+    try:
+        user = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+        if not user:
+            return
+        user_id = user[0] if isinstance(user, tuple) else user['id']
+
+        existing = set()
+        for row in conn.execute("SELECT date, amount, memo FROM extra_profit WHERE user_id = ?", (user_id,)).fetchall():
+            d = row[0] if isinstance(row, tuple) else row['date']
+            a = row[1] if isinstance(row, tuple) else row['amount']
+            m = row[2] if isinstance(row, tuple) else row['memo']
+            existing.add((d, int(a), str(m)))
+
+        seeds = [
+            ('2023-04-01', 245600, '현금'),
+            ('2023-05-01', 355000, '현금'),
+            ('2023-06-01', 425000, '잡이익'),
+            ('2023-07-01', -700000, '대진약사'),
+            ('2023-08-01', 395000, '잡이익'),
+            ('2023-09-01', 270000, '잡이익'),
+            ('2023-10-01', 476000, '잡이익'),
+            ('2023-11-01', 498000, '잡이익'),
+            ('2023-12-01', 408000, '잡이익'),
+            ('2024-01-01', -350000, '지훈'),
+            ('2024-01-01', 283300, '잡이익'),
+            ('2024-02-01', -350000, '지훈'),
+            ('2024-02-01', 336000, '잡이익'),
+            ('2024-03-01', -350000, '지훈'),
+            ('2024-03-01', 345000, '잡이익'),
+            ('2024-04-01', -350000, '지훈'),
+            ('2024-04-01', 200000, '잡이익'),
+            ('2024-05-01', -1000000, '지훈'),
+            ('2024-05-01', 190000, '잡이익'),
+            ('2024-06-01', -700000, '지훈'),
+            ('2024-06-01', 113000, '잡이익'),
+            ('2024-08-01', -350000, '지훈'),
+            ('2024-08-01', -100000, '현용(판시딜)'),
+            ('2024-08-01', -790000, '비엘비'),
+            ('2024-09-01', -350000, '지훈'),
+            ('2024-11-01', -350000, '지훈'),
+            ('2024-12-01', -700000, '지훈'),
+            ('2025-03-01', -350000, '지훈'),
+            ('2025-07-01', -1050000, '지훈'),
+            ('2025-12-01', -700000, '지훈'),
+            ('2026-01-01', -700000, '지훈'),
+            ('2026-03-01', 340000, '약올려'),
+            ('2026-03-01', -350000, '지훈'),
+            ('2026-04-01', 328549, '잡이익'),
+            ('2026-05-01', 145094, '잡이익'),
+            ('2026-06-01', 194928, '잡이익'),
+            ('2026-07-01', 240452, '잡이익'),
+            ('2026-08-01', 212729, '잡이익'),
+        ]
+
+        inserted = 0
+        for d, a, m in seeds:
+            if (d, a, m) not in existing:
+                conn.execute(
+                    "INSERT INTO extra_profit (user_id, date, amount, memo) VALUES (?, ?, ?, ?)",
+                    (user_id, d, a, m)
+                )
+                inserted += 1
+        if inserted > 0:
+            print(f"✅ 잡이익 {inserted}건 자동 마이그레이션 완료 (누락 데이터 반영)")
+    except Exception as e:
+        print(f"잡이익 시딩 건너뜀 또는 오류: {e}")
+
 
 
 def init_sqlite_db():

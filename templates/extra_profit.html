@@ -17,7 +17,7 @@
           <div class="mb-3"><label for="extraDate" class="form-label fw-bold">발생 날짜</label>
             <input id="extraDate" type="date" class="form-control" name="date" required value="{{ editing.date if editing else ('%04d-%02d-01'|format(year,month)) }}"></div>
           <div class="mb-3"><label for="extraAmount" class="form-label fw-bold">추가 이익 (원)</label>
-            <input id="extraAmount" type="number" class="form-control form-control-lg text-end" name="amount" min="1" max="1000000000000" step="1" required value="{{ editing.amount if editing else '' }}" placeholder="예: 150000"></div>
+            <input id="extraAmount" type="number" class="form-control form-control-lg text-end" name="amount" min="-1000000000000" max="1000000000000" step="1" required value="{{ editing.amount if editing else '' }}" placeholder="예: 150000 또는 -700000"></div>
           <div class="mb-3"><label for="extraMemo" class="form-label fw-bold">내용</label>
             <input id="extraMemo" class="form-control" name="memo" maxlength="200" required value="{{ editing.memo if editing else '' }}" placeholder="예: 납품 정산 차액"></div>
           <div class="d-flex gap-2"><button type="submit" class="btn btn-primary flex-grow-1">{{ '수정 저장' if editing else '잡이익 추가' }}</button>
@@ -36,11 +36,11 @@
           <button class="btn btn-sm btn-outline-primary" type="submit">조회</button>
         </form>
       </div>
-      <div class="card-body"><div class="alert alert-success mb-0">이달 추가 이익 합계 <strong class="float-end">{{ '{:,}'.format(month_total) }}원</strong></div></div>
+      <div class="card-body"><div class="alert {% if month_total < 0 %}alert-warning{% else %}alert-success{% endif %} mb-0">이달 추가 이익 합계 <strong class="float-end">{{ '{:+,}'.format(month_total) if month_total < 0 else '{:,}'.format(month_total) }}원</strong></div></div>
       <div class="table-responsive"><table class="table table-hover align-middle mb-0">
         <thead class="table-light"><tr><th>날짜</th><th>내용</th><th class="text-end">금액</th><th class="text-end">관리</th></tr></thead>
         <tbody>{% for entry in entries %}
-          <tr><td class="text-nowrap">{{ entry.date }}</td><td class="text-break">{{ entry.memo }}</td><td class="text-end text-nowrap">{{ '{:,}'.format(entry.amount) }}원</td>
+          <tr><td class="text-nowrap">{{ entry.date }}</td><td class="text-break">{{ entry.memo }}</td><td class="text-end text-nowrap {% if entry.amount < 0 %}text-danger fw-bold{% endif %}">{{ '{:+,}'.format(entry.amount) if entry.amount < 0 else '{:,}'.format(entry.amount) }}원</td>
             <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('extra_profit.view', year=year, month=month, edit=entry.id) }}">수정</a>
             <form method="post" action="{{ url_for('extra_profit.delete', item_id=entry.id) }}" class="d-inline" onsubmit="return confirm('이 잡이익을 삭제하시겠습니까?');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="btn btn-sm btn-outline-danger">삭제</button></form></td></tr>
