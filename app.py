@@ -731,8 +731,19 @@ def input_sales():
         finally:
             conn.close()
 
-    today = datetime.date.today().isoformat()
-    return render_template('input.html', today=today, recent_sales=recent, yoy_day=yoy_day)
+    selected_date = request.args.get('date', '').strip()
+    edit_sale = None
+    if selected_date:
+        try:
+            datetime.date.fromisoformat(selected_date)
+        except ValueError:
+            selected_date = ''
+        else:
+            edit_sale = next((sale for sale in recent if sale['date'] == selected_date), None)
+
+    today = edit_sale['date'] if edit_sale else datetime.date.today().isoformat()
+    return render_template('input.html', today=today, recent_sales=recent,
+                           yoy_day=yoy_day, edit_sale=edit_sale)
 
 
 @app.route('/business-schedule', methods=['POST'])
