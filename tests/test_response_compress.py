@@ -1,6 +1,23 @@
 """Tests for zero-dependency HTTP gzip compression."""
 import gzip
+import pytest
 from test_analysis import client_for, service
+
+
+@pytest.mark.parametrize('encoding', ['gzip;q=0', 'xgzip', 'br, gzip;q=0'])
+def test_respects_encoding_refusal(service, encoding):
+    response = service.app.test_client().get('/login', headers={'Accept-Encoding': encoding})
+    assert 'Content-Encoding' not in response.headers
+    assert 'Accept-Encoding' in response.vary
+
+
+def test_head_preserves_negotiated_get_headers(service):
+    client = service.app.test_client()
+    headers = {'Accept-Encoding': 'gzip'}
+    get = client.get('/login', headers=headers)
+    head = client.head('/login', headers=headers)
+    assert head.data == b''
+    assert head.headers['Content-Length'] == get.headers['Content-Length']
 
 
 def test_gzip_compression_reduces_size_and_sets_headers(service):

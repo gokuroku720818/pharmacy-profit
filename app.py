@@ -545,6 +545,17 @@ def dashboard():
     user_id = session['user_id']
 
     now = time.time()
+    as_of = korea_today().isoformat()
+    cached_context = None
+    with _CACHE_LOCK:
+        bucket = _USER_CACHE.setdefault(user_id, {})
+        entry = bucket.get('dashboard_context')
+        if entry and now - entry['ts'] < _CACHE_TTL and entry['as_of'] == as_of:
+            cached_context = entry['data']
+    if cached_context is not None:
+        # Cache calculations, not HTML: flashes and session UI stay per-request.
+        return render_template('dashboard.html', **cached_context)
+
     conn = get_db()
     try:
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
@@ -645,12 +656,11 @@ def dashboard():
             'weekly_stats': weekly_stats
         }
 
-        # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
-        recent_preload = [dict(r) for r in reversed(cur_month_rows[-20:])] if cur_month_rows else []
+        # Never publish an older snapshot after a concurrent invalidation.
+        # Recent input history is loaded independently across ALL months.
         with _CACHE_LOCK:
-            if user_id not in _USER_CACHE:
-                _USER_CACHE[user_id] = {}
-            _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
+            if _USER_CACHE.get(user_id) is bucket:
+                bucket['dashboard_context'] = {'ts': now, 'as_of': as_of, 'data': dashboard_ctx}
     finally:
         conn.close()
 
