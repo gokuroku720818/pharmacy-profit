@@ -1,5 +1,34 @@
 /* 약국 마감 스크린샷 3장 전용 고정밀 OCR 추출 스크립트 */
 
+let ocrEnginePromise = null;
+function loadOCREngine() {
+    if (window.Tesseract) return Promise.resolve(window.Tesseract);
+    if (ocrEnginePromise) return ocrEnginePromise;
+    ocrEnginePromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+        script.async = true;
+        const fail = () => {
+            clearTimeout(timer);
+            script.onload = script.onerror = null;
+            script.remove();
+            reject(new Error('OCR 엔진을 불러오지 못했습니다. 다시 시도하거나 직접 입력해 주세요.'));
+        };
+        const timer = setTimeout(fail, 20000);
+        script.onload = () => {
+            if (!window.Tesseract) return fail();
+            clearTimeout(timer);
+            resolve(window.Tesseract);
+        };
+        script.onerror = fail;
+        document.head.appendChild(script);
+    }).catch(error => {
+        ocrEnginePromise = null;
+        throw error;
+    });
+    return ocrEnginePromise;
+}
+
 // 텍스트 클리닝 및 노이즈 보정
 function cleanText(raw) {
     if (!raw) return '';
@@ -132,7 +161,8 @@ async function runOCR(imageSource, progressBarId, statusTextId) {
     
     try {
         // Tesseract v5 공식 단일 함수 호출
-        const result = await Tesseract.recognize(imageSource, 'eng', {
+        const engine = await loadOCREngine();
+        const result = await engine.recognize(imageSource, 'eng', {
             logger: m => {
                 if (m.status === 'recognizing text' && progressEl) {
                     progressEl.style.width = `${Math.round(m.progress * 100)}%`;

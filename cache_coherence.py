@@ -65,17 +65,7 @@ def install(module):
                     return fn(*args, **kwargs)
                 user_id = session['user_id']
                 with for_user(user_id):
-                    response = fn(*args, **kwargs)
-                    if endpoint_name == 'dashboard':
-                        # dashboard preloads only its selected month's daily rows.
-                        # /input promises the latest 20 across ALL months. Its own
-                        # indexed query is authoritative; never reuse this partial
-                        # month snapshot as a complete recent-history cache.
-                        with module._CACHE_LOCK:
-                            bucket = module._USER_CACHE.get(user_id)
-                            if bucket is not None:
-                                bucket.pop('input_cache', None)
-                    return response
+                    return fn(*args, **kwargs)
             return synchronized_page
 
         module.app.view_functions[endpoint] = make_page(original_view, endpoint)
