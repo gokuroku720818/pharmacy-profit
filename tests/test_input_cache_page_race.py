@@ -55,7 +55,6 @@ def _assert_page_cannot_repopulate_after_invalidation(service, monkeypatch, path
     assert statuses == [200]
     with service._CACHE_LOCK:
         assert 'input_cache' not in service._USER_CACHE.get(1, {})
-        assert 'dashboard_context' not in service._USER_CACHE.get(1, {})
 
 
 def test_dashboard_inflight_read_cannot_republish_stale_input_cache(service, conn, monkeypatch):

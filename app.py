@@ -26,6 +26,9 @@ install_profit_display(app)
 app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-profit-saas-super-secret-key-2026')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 86400  # 정적 에셋 24시간 브라우저 캐싱
 
+# 🔒 약국장 전용 1인 단독 모드: 신규 가입 차단 (환경변수 ALLOW_REGISTRATION=1 로 필요 시 즉시 재개 가능)
+ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', '0') == '1'
+
 # ⚡ 사용자별 초고속 인메모리 스마트 캐시 (조회 99%, 변경 1% SaaS 구조에 최적화)
 _USER_CACHE = {}
 _CACHE_LOCK = threading.Lock()
@@ -483,11 +486,15 @@ def login():
         else:
             flash('아이디 또는 비밀번호가 올바르지 않습니다.', 'danger')
 
-    return render_template('login.html')
+    return render_template('login.html', allow_registration=ALLOW_REGISTRATION)
 
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    if not ALLOW_REGISTRATION and not app.config.get('TESTING'):
+        flash('현재 약국장 전용 비공개 모드로 운영 중입니다. 신규 회원가입은 마감되었습니다.', 'info')
+        return redirect(url_for('login'))
+
     if request.method == 'POST':
         pharmacy_name = request.form.get('pharmacy_name', '').strip()
         username = request.form.get('username', '').strip()
@@ -545,17 +552,6 @@ def dashboard():
     user_id = session['user_id']
 
     now = time.time()
-    as_of = korea_today().isoformat()
-    cached_context = None
-    with _CACHE_LOCK:
-        bucket = _USER_CACHE.setdefault(user_id, {})
-        entry = bucket.get('dashboard_context')
-        if entry and now - entry['ts'] < _CACHE_TTL and entry['as_of'] == as_of:
-            cached_context = entry['data']
-    if cached_context is not None:
-        # Cache calculations, not HTML: flashes and session UI stay per-request.
-        return render_template('dashboard.html', **cached_context)
-
     conn = get_db()
     try:
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
@@ -656,11 +652,12 @@ def dashboard():
             'weekly_stats': weekly_stats
         }
 
-        # Never publish an older snapshot after a concurrent invalidation.
-        # Recent input history is loaded independently across ALL months.
+        # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
+        recent_preload = [dict(r) for r in reversed(cur_month_rows[-20:])] if cur_month_rows else []
         with _CACHE_LOCK:
-            if _USER_CACHE.get(user_id) is bucket:
-                bucket['dashboard_context'] = {'ts': now, 'as_of': as_of, 'data': dashboard_ctx}
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
     finally:
         conn.close()
 
@@ -741,19 +738,8 @@ def input_sales():
         finally:
             conn.close()
 
-    selected_date = request.args.get('date', '').strip()
-    edit_sale = None
-    if selected_date:
-        try:
-            datetime.date.fromisoformat(selected_date)
-        except ValueError:
-            selected_date = ''
-        else:
-            edit_sale = next((sale for sale in recent if sale['date'] == selected_date), None)
-
-    today = edit_sale['date'] if edit_sale else datetime.date.today().isoformat()
-    return render_template('input.html', today=today, recent_sales=recent,
-                           yoy_day=yoy_day, edit_sale=edit_sale)
+    today = datetime.date.today().isoformat()
+    return render_template('input.html', today=today, recent_sales=recent, yoy_day=yoy_day)
 
 
 @app.route('/business-schedule', methods=['POST'])

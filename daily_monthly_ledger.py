@@ -16,16 +16,6 @@ from flask import flash as flask_flash, make_response, redirect, render_template
 from extra_profit import monthly_totals
 
 
-def filter_sitewide_warning(message, category):
-    """Hide the legacy ledger discrepancy banner while retaining other flashes."""
-    text = str(message)
-    if category == 'warning' and (
-            '과거 월장부의 전체 합계와 다를 수 있으므로' in text or
-            '일별 total 합계와 조제료·일매순익·비보험마진 합계가 서로 다른 날짜' in text):
-        return None
-    return message
-
-
 def load_monthly_ledger(conn, user_id):
     """One portable, account-scoped aggregate for SQLite and PostgreSQL."""
     daily = conn.execute('''
@@ -185,9 +175,9 @@ table{border-collapse:collapse;width:100%;white-space:nowrap}th,td{padding:10px;
         original_flash = profit_display.flash
 
         def source_accurate_flash(message, category='message'):
-            message = filter_sitewide_warning(message, category)
-            if message is None:
-                return None
+            if category == 'warning' and '과거 월장부' in str(message):
+                message = ('주의: 일별 total 합계와 조제료·일매순익·비보험마진 합계가 서로 다른 날짜가 있습니다. '
+                           '공식 월합계는 일별 total을 사용하고 차액은 월별 합계 검증 화면에서 별도로 표시합니다.')
             return original_flash(message, category)
 
         profit_display.flash = source_accurate_flash

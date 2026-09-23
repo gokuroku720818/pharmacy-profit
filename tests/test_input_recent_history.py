@@ -6,37 +6,7 @@ from test_analysis import add, client_for, conn, service
 
 def _recent_dates(response):
     assert response.status_code == 200
-    return re.findall(r'<td class="ps-3 fw-bold">(?:<a[^>]+>)?(20\d\d-\d\d-\d\d)', response.get_data(as_text=True))
-
-
-def test_recent_date_link_loads_existing_values_and_memo_into_form(service, conn):
-    add(conn, '2026-09-18', disp=123456, daily=23456, nim=3456, user=1)
-    conn.execute("UPDATE daily_profit SET memo = ? WHERE user_id = ? AND date = ?",
-                 ('직접 확인한 메모', 1, '2026-09-18'))
-    conn.commit()
-    service.invalidate_user_cache(1)
-    client = client_for(service, user=1)
-
-    history_html = client.get('/input').get_data(as_text=True)
-    assert 'href="/input?date=2026-09-18"' in history_html
-
-    edit_html = client.get('/input?date=2026-09-18').get_data(as_text=True)
-    assert 'value="2026-09-18"' in edit_html
-    assert 'value="123456"' in edit_html
-    assert 'value="23456"' in edit_html
-    assert 'value="3456"' in edit_html
-    assert 'value="직접 확인한 메모"' in edit_html
-
-
-def test_input_date_cannot_load_another_users_record(service, conn):
-    conn.execute('INSERT INTO users (id, username, password_hash, pharmacy_name) VALUES (?, ?, ?, ?)',
-                 (2, 'private-history-user', 'test-only', 'Other pharmacy'))
-    conn.commit()
-    add(conn, '2026-09-17', disp=987654, daily=87654, nim=7654, user=2)
-    client = client_for(service, user=1)
-
-    html = client.get('/input?date=2026-09-17').get_data(as_text=True)
-    assert 'value="987654"' not in html
+    return re.findall(r'<td class="ps-3 fw-bold">(20\d\d-\d\d-\d\d)</td>', response.get_data(as_text=True))
 
 
 def test_dashboard_preload_preserves_last_twenty_across_month_boundary(service, conn):

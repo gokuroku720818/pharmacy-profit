@@ -220,7 +220,7 @@
                         <tbody>
                             {% for sale in recent_sales %}
                             <tr>
-                                <td class="ps-3 fw-bold"><a href="{{ url_for('input_sales', date=sale.date) }}" class="text-decoration-none" title="이 기록 수정">{{ sale.date }}</a></td>
+                                <td class="ps-3 fw-bold">{{ sale.date }}</td>
                                 <td><span class="badge {% if sale.day_of_week == '토' %}bg-primary{% else %}bg-secondary{% endif %}">{{ sale.day_of_week }}</span></td>
                                 <td class="text-end">{{ "{:,}".format(sale.dispensing_fee) }}</td>
                                 <td class="text-end">{{ "{:,}".format(sale.daily_net_profit) }}</td>
@@ -243,7 +243,8 @@
 .drop-zone:hover { background-color: #f0f7ff !important; }
 </style>
 
-<script src="{{ url_for('static', filename='js/ocr_extract.js', v='lazy-20260923') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="{{ url_for('static', filename='js/ocr_extract.js') }}"></script>
 <script>
 let lastFocusedSlot = 1;
 
