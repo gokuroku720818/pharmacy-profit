@@ -22,7 +22,9 @@ def test_source_mode_displays_actual_daily_fields_and_preserves_ledger_total():
     assert missing['breakdown_available'] is False and missing['dispensing_fee'] is None
 
 
-def test_report_shows_historical_source_numbers_with_warning_not_fabricated_total(service, conn):
+def test_report_shows_historical_source_numbers_with_warning_not_fabricated_total(service, conn, monkeypatch):
+    import profit_display
+    monkeypatch.setattr(profit_display, 'SHOW_LEDGER_WARNING', True)
     add(conn, '2026-08-01', disp=400, daily=100, nim=50)
     conn.execute('''INSERT INTO monthly_summary
         (user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff)

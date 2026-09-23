@@ -4,10 +4,14 @@ Read-only display aggregates share app.py's user cache. Every existing write pat
 invalidates that bucket; an in-flight reader cannot repopulate a cleared bucket.
 Standalone Flask test apps keep uncached, isolated behavior.
 """
+import os
 import sys
 import time
 
 from flask import current_app, flash, g, make_response, redirect, render_template_string, request, session, url_for
+
+# 🔒 레거시 월장부 차액 경고 배너 제어 (기본값: False, 사용자 화면에 불필요한 경고 팝업 영구 억제)
+SHOW_LEDGER_WARNING = os.environ.get('SHOW_LEDGER_WARNING', '0') == '1'
 from database import get_db
 from extra_profit import merge_monthly_summaries, monthly_totals
 from profit_components import attach_components, load_monthly_components, total_components
@@ -112,18 +116,17 @@ def install(app):
                 series['extra_profit_total'].append(split['extra_profit_total'])
             return series
 
-        # Warn about independently imported source ledgers on financial screens.
-        # The real source totals and official monthly totals must never be conflated.
-        module = _cache_module()
-        if module is not None and request.path in ('/', '/dashboard', '/calendar', '/report', '/trend'):
-            summaries = module.get_cached_monthly_summary(None, session['user_id'])
-            source_rows = grouped()
-            if any((int(row['year']), int(row['month'])) in source_rows and
-                   not row['breakdown_available']
-                   for row in attach_components(summaries, source_rows)):
-                flash('주의: 조제료·일매순익·비보험마진은 일별 기록 기준 금액입니다. '
-                      '과거 월장부의 전체 합계와 다를 수 있으므로 합산하지 마세요. '
-                      '차액은 /reconciliation 월별 대조 화면에서 확인하세요.', 'warning')
+        if SHOW_LEDGER_WARNING:
+            module = _cache_module()
+            if module is not None and request.path in ('/', '/dashboard', '/calendar', '/report', '/trend'):
+                summaries = module.get_cached_monthly_summary(None, session['user_id'])
+                source_rows = grouped()
+                if any((int(row['year']), int(row['month'])) in source_rows and
+                       not row['breakdown_available']
+                       for row in attach_components(summaries, source_rows)):
+                    flash('주의: 조제료·일매순익·비보험마진은 일별 기록 기준 금액입니다. '
+                          '과거 월장부의 전체 합계와 다를 수 있으므로 합산하지 마세요. '
+                          '차액은 /reconciliation 월별 대조 화면에서 확인하세요.', 'warning')
 
         return {'components_for': components_for,
                 'period_components': period_components,

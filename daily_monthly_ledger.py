@@ -175,6 +175,9 @@ table{border-collapse:collapse;width:100%;white-space:nowrap}th,td{padding:10px;
         original_flash = profit_display.flash
 
         def source_accurate_flash(message, category='message'):
+            if not getattr(profit_display, 'SHOW_LEDGER_WARNING', False):
+                if category == 'warning' and ('과거 월장부' in str(message) or '일별 total' in str(message)):
+                    return None
             if category == 'warning' and '과거 월장부' in str(message):
                 message = ('주의: 일별 total 합계와 조제료·일매순익·비보험마진 합계가 서로 다른 날짜가 있습니다. '
                            '공식 월합계는 일별 total을 사용하고 차액은 월별 합계 검증 화면에서 별도로 표시합니다.')
