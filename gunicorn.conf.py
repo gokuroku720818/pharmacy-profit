@@ -11,7 +11,7 @@ keepalive = 65
 
 
 def post_worker_init(worker):
-    """Install accounting protections first, then optional independent work home."""
+    """Install daily-only accounting and labels before cache locks and metrics."""
     from importlib import import_module
     app_module = import_module('app')
     if hasattr(app_module, 'bootstrap_app_extensions'):
@@ -31,9 +31,3 @@ def post_worker_init(worker):
         install_cache_coherence(app_module)
         install_metrics(app_module)
 
-    try:
-        from work_home import install as install_work_home
-        install_work_home(app_module)
-    except Exception:
-        # Do not make an optional work dashboard failure take down accounting.
-        worker.log.exception('Work homepage unavailable; keeping original dashboard')
