@@ -4,6 +4,7 @@ __pycache__/
 *.pyd
 .env
 venv/
+.venv/
 env/
 .vscode/
 .idea/
@@ -19,3 +20,6 @@ data/*.xlsx
 data/*.xls
 data/export_data.json
 data/*backup*.json
+data/*.dump
+data/*.key
+data/.sales-import-*
