@@ -305,10 +305,10 @@ def warm_up_cache(user_id=1):
             with app.app_context():
                 conn = get_db()
                 try:
-                    now = datetime.datetime.now()
+                    today = korea_today()
                     get_cached_monthly_summary(conn, user_id)
-                    get_cached_current_month_dailies(conn, user_id, now.year, now.month)
-                    get_cached_analysis_rows(conn, user_id, now.year, now.month)
+                    get_cached_current_month_dailies(conn, user_id, today.year, today.month)
+                    get_cached_analysis_rows(conn, user_id, today.year, today.month)
                     get_cached_dow_avg(conn, user_id)
                     get_cached_business_schedule(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
@@ -385,7 +385,7 @@ def get_latest_month_summary(user_id, conn=None):
             'grand_total': int(row['grand_total'] or 0),
             'diff': int(row['prev_month_diff'] or 0)
         }
-    now = datetime.date.today()
+    now = korea_today()
     return {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0}
 
 
@@ -877,7 +877,7 @@ def input_sales():
         finally:
             conn.close()
 
-    today = datetime.date.today().isoformat()
+    today = korea_today().isoformat()
     return render_template('input.html', today=today, recent_sales=recent, yoy_day=yoy_day)
 
 
@@ -962,7 +962,7 @@ def calendar_view():
             default_year = int(last_m['year'])
             default_month = int(last_m['month'])
         else:
-            today_dt = datetime.date.today()
+            today_dt = korea_today()
             default_year, default_month = today_dt.year, today_dt.month
 
         year = request.args.get('year', default_year, type=int)
@@ -1353,7 +1353,7 @@ def calculator():
         settings = defaults
 
     # ⚡ 현재 월 실적 조회 (원클릭 자동 불러오기용) - 캐시된 당월 일별 데이터 활용
-    today = datetime.date.today()
+    today = korea_today()
     cur_month_rows = get_cached_current_month_dailies(None, user_id, today.year, today.month)
     disp = sum(int(r.get('dispensing_fee') or 0) for r in cur_month_rows)
     daily = sum(int(r.get('daily_net_profit') or 0) for r in cur_month_rows)
