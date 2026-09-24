@@ -27,6 +27,7 @@
         {% endwith %}
 
         <form method="POST" action="/login">
+            <input type="hidden" name="csrf_token" value="{{ form_csrf_token() }}">
             <div class="mb-3">
                 <label for="username" class="form-label small fw-bold">아이디</label>
                 <div class="input-group">

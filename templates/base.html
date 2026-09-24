@@ -72,9 +72,10 @@
                         <span class="badge bg-white text-dark py-2 px-3 fw-bold me-2">
                             <i class="fas fa-store text-primary me-1"></i>{{ session.get('pharmacy_name', '약국') }}
                         </span>
-                        <a href="/logout" class="btn btn-sm btn-outline-light" title="로그아웃">
-                            <i class="fas fa-sign-out-alt"></i>
-                        </a>
+                        <form method="POST" action="/logout">
+                            <input type="hidden" name="csrf_token" value="{{ form_csrf_token() }}">
+                            <button type="submit" class="btn btn-sm btn-outline-light" title="로그아웃"><i class="fas fa-sign-out-alt"></i></button>
+                        </form>
                     </li>
                 </ul>
             </div>
@@ -86,6 +87,7 @@
         <div class="modal-dialog">
             <div class="modal-content border-0 shadow">
                 <form method="POST" action="/upload_excel" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ form_csrf_token() }}">
                     <div class="modal-header bg-primary text-white">
                         <h5 class="modal-title" id="excelUploadModalLabel">
                             <i class="fas fa-file-excel me-2"></i>기존 순익 엑셀 파일 가져오기
@@ -177,9 +179,12 @@
                 <i class="fas fa-user-secret fa-lg me-2 text-dark"></i>
                 <strong>관리자 열람 모드:</strong> 현재 <strong>[{{ session.pharmacy_name }}]</strong> 약국의 데이터 화면을 조회 중입니다.
             </div>
-            <a href="/admin/switch_back" class="btn btn-sm btn-dark fw-bold">
-                <i class="fas fa-arrow-left me-1"></i> 관리자 콘솔로 복귀
-            </a>
+            <form method="POST" action="/admin/switch_back">
+                <input type="hidden" name="csrf_token" value="{{ form_csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-dark fw-bold">
+                    <i class="fas fa-arrow-left me-1"></i> 관리자 콘솔로 복귀
+                </button>
+            </form>
         </div>
         {% endif %}
 

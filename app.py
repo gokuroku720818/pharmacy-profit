@@ -25,7 +25,8 @@ app.jinja_env.trim_blocks = True
 app.jinja_env.lstrip_blocks = True
 from profit_display import install as install_profit_display
 install_profit_display(app)
-app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-profit-saas-super-secret-key-2026')
+from auth_config import require_secret_key
+app.secret_key = require_secret_key()
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 86400  # 정적 에셋 24시간 브라우저 캐싱
 
 # 🔒 약국장 전용 1인 단독 모드: 신규 가입 차단 (환경변수 ALLOW_REGISTRATION=1 로 필요 시 즉시 재개 가능)
@@ -201,14 +202,15 @@ def invalidate_user_cache(user_id=None):
         _ADMIN_CACHE.clear()
 
 
-# 서버 구동 시 DB 및 스키마 자동 초기화
-init_db()
+# Schema initialization is an explicit operator step: python manage_db.py init.
 from extra_profit import install as install_extra_profit
 install_extra_profit(app)
 from response_security import install as install_response_security
 install_response_security(app)
 from response_compress import install as install_response_compress
 install_response_compress(app)
+from csrf_protection import install as install_csrf_protection
+install_csrf_protection(app)
 
 
 def bootstrap_app_extensions(app_module=None):
@@ -579,7 +581,7 @@ def register():
     return render_template('register.html')
 
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 def logout():
     session.clear()
     flash('정상적으로 로그아웃되었습니다.', 'info')
@@ -1521,7 +1523,7 @@ def admin_dashboard():
         return redirect(url_for('dashboard'))
 
 
-@app.route('/admin/switch_user/<int:target_user_id>')
+@app.route('/admin/switch_user/<int:target_user_id>', methods=['POST'])
 @admin_required
 def admin_switch_user(target_user_id):
     """관리자가 특정 약국의 계정으로 전환하여 데이터를 점검/둘러보기"""
@@ -1548,7 +1550,7 @@ def admin_switch_user(target_user_id):
     return redirect(url_for('dashboard'))
 
 
-@app.route('/admin/switch_back')
+@app.route('/admin/switch_back', methods=['POST'])
 @login_required
 def admin_switch_back():
     """관리자 원래 계정으로 복귀"""
@@ -1741,7 +1743,6 @@ def internal_server_error(e):
 
 
 if __name__ == '__main__':
-    init_db()
     bootstrap_app_extensions()
     print("\n=== 약국 순익 관리 시스템 (다중 약국 온라인 SaaS) 시작 ===")
     print("접속 주소: http://localhost:5000\n")
