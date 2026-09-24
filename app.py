@@ -1084,6 +1084,7 @@ def report():
         comparison_current_total=comparison_current_total,
         comparison_previous_total=comparison_previous_total,
         comparison_label=yoy_label,
+        use_period_comparison=True,
     )
 
     # 12개월 전체 배열 (작년 vs 올해 콤보 차트용)
