@@ -945,7 +945,11 @@ def save_business_schedule():
     finally:
         conn.close()
     user_id = session['user_id']
-    invalidate_user_cache_keys(user_id, prefixes=('dashboard_ctx:', 'calendar_ctx:'))
+    invalidate_user_cache_keys(
+        user_id,
+        keys=('business_schedule',),
+        prefixes=('dashboard_ctx:', 'calendar_ctx:')
+    )
     with _CACHE_LOCK:
         bucket = _USER_CACHE.setdefault(user_id, {})
         bucket['business_schedule'] = {
