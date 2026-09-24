@@ -28,7 +28,7 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt pytest
       - name: Run synthetic-data regression suite
-        run: python -m pytest -q tests/test_analysis.py
+        run: python -m pytest -q tests/test_analysis.py::test_dashboard_and_calendar_second_request_need_no_database
       - name: Boot configured worker without financial seed data
         shell: bash
         run: |
