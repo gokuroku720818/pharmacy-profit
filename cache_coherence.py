@@ -18,6 +18,7 @@ _USER_READERS = (
     'get_cached_dow_avg',
     'get_cached_business_schedule',
     'get_cached_analysis_rows',
+    'get_cached_weekly_stats',
 )
 
 
