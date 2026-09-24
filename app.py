@@ -519,6 +519,8 @@ def login():
 
         conn = get_db()
         try:
+            if hasattr(conn, 'use_autocommit_reads'):
+                conn.use_autocommit_reads()
             user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         finally:
             conn.close()
@@ -600,6 +602,8 @@ def dashboard():
     now = time.time()
     conn = get_db()
     try:
+        if hasattr(conn, 'use_autocommit_reads'):
+            conn.use_autocommit_reads()
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
         rows = get_cached_monthly_summary(conn, user_id)
 
@@ -837,6 +841,8 @@ def calendar_view():
     user_id = session['user_id']
     conn = get_db()
     try:
+        if hasattr(conn, 'use_autocommit_reads'):
+            conn.use_autocommit_reads()
         # [초고속 스마트 캐시 1] 월별 요약 캐시에서 연도 목록 및 최신 월 도출 (DB 연결/쿼리 0회, 0ms)
         m_rows = get_cached_monthly_summary(conn, user_id)
         years = sorted(list(set(int(r['year']) for r in m_rows)), reverse=True)
