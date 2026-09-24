@@ -604,7 +604,9 @@ def recalc_monthly_summary(conn, user_id, year, month, commit=True):
     """월 합계 갱신. 일괄 가져오기는 호출자가 전체 트랜잭션을 커밋한다."""
     try:
         cursor = conn.cursor()
-        date_prefix = f"{year}-{month:02d}"
+        month_start = f"{year:04d}-{month:02d}-01"
+        next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+        next_month_start = f"{next_year:04d}-{next_month:02d}-01"
 
         row = cursor.execute('''
             SELECT
@@ -612,8 +614,8 @@ def recalc_monthly_summary(conn, user_id, year, month, commit=True):
                 COALESCE(SUM(non_insurance_margin), 0) as nim,
                 COALESCE(SUM(total), 0) as gt
             FROM daily_profit
-            WHERE user_id = ? AND date LIKE ?
-        ''', (user_id, date_prefix + '%',)).fetchone()
+            WHERE user_id = ? AND date >= ? AND date < ?
+        ''', (user_id, month_start, next_month_start)).fetchone()
 
         # 전월 합계
         prev_month = month - 1

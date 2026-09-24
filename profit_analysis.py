@@ -35,8 +35,15 @@ def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=No
     low/high are observed weekday minima/maxima, NOT confidence intervals.
     Keep dow_avg in the call signature for older callers, but never use lifetime averages.
     """
-    owned = conn is None
-    conn = conn or get_db()
+    needs_db = (
+        history_rows is None or schedule is None or entered_rows is None
+        or month_summary_row is None or last_year_total is None
+    )
+    owned = conn is None and needs_db
+    if owned:
+        conn = get_db()
+        if hasattr(conn, 'use_autocommit_reads'):
+            conn.use_autocommit_reads()
     try:
         today = as_of or korea_today()
         start = dt.date(year, month, 1)
@@ -148,8 +155,12 @@ def get_yoy_day_comparison(conn, user_id, date_str=None, today_row=None, compari
 
 def get_profit_balance_diagnosis(conn, user_id, year, month, entered_rows=None, month_summary_row=None):
     if entered_rows is None:
-        entered_rows = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date LIKE ?',
-                                    (user_id, f'{year}-{month:02d}%')).fetchall()
+        start = dt.date(year, month, 1)
+        next_month = (start.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+        entered_rows = conn.execute(
+            'SELECT * FROM daily_profit WHERE user_id = ? AND date >= ? AND date < ?',
+            (user_id, start.isoformat(), next_month.isoformat())
+        ).fetchall()
     entered_rows = [r for r in entered_rows if r['date'] <= korea_today().isoformat()]
     values = [sum(int(r[field] or 0) for r in entered_rows) for field, _ in FIELDS]
     total = sum(values)

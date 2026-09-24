@@ -17,6 +17,8 @@ _USER_READERS = (
     'get_cached_current_month_dailies',
     'get_cached_dow_avg',
     'get_cached_business_schedule',
+    'get_cached_analysis_rows',
+    'get_cached_weekly_stats',
 )
 
 
@@ -93,6 +95,15 @@ def install(module):
                     lock.release()
 
     module.invalidate_user_cache = invalidate_user_cache
+
+    original_invalidate_keys = module.invalidate_user_cache_keys
+
+    @wraps(original_invalidate_keys)
+    def invalidate_user_cache_keys(user_id, *args, **kwargs):
+        with for_user(user_id), admin_guard:
+            return original_invalidate_keys(user_id, *args, **kwargs)
+
+    module.invalidate_user_cache_keys = invalidate_user_cache_keys
     original_admin_read = module.get_cached_admin_stats
     original_admin_invalidate = module.invalidate_admin_cache
 
