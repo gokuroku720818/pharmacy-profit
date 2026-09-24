@@ -87,13 +87,14 @@ def get_cached_current_month_dailies(conn=None, user_id=None, cur_year=None, cur
         conn = get_db()
         should_close = True
     try:
-        date_prefix = f"{cur_year}-{cur_month:02d}"
+        month_start = datetime.date(cur_year, cur_month, 1)
+        next_month = (month_start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
         cur_month_rows = conn.execute('''
             SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
             FROM daily_profit
-            WHERE user_id = ? AND date LIKE ?
+            WHERE user_id = ? AND date >= ? AND date < ?
             ORDER BY date ASC
-        ''', (user_id, date_prefix + '%')).fetchall()
+        ''', (user_id, month_start.isoformat(), next_month.isoformat())).fetchall()
 
         data = [dict(r) for r in cur_month_rows]
         with _CACHE_LOCK:
@@ -216,13 +217,46 @@ def invalidate_admin_cache():
 
 
 def invalidate_user_cache(user_id=None):
-    """데이터 변경 시 해당 사용자의 인메모리 캐시 및 관리자 캐시 즉시 무효화 (실시간 정합성 보장)"""
+    """알 수 없는/광범위 변경용 전체 사용자 캐시 무효화."""
     with _CACHE_LOCK:
         if user_id is None:
             _USER_CACHE.clear()
         elif user_id in _USER_CACHE:
             _USER_CACHE.pop(user_id, None)
         _ADMIN_CACHE.clear()
+
+
+def invalidate_user_cache_keys(user_id, keys=(), prefixes=()):
+    """변경된 데이터에 의존하는 캐시만 제거해 불필요한 원격 DB 재조회 방지."""
+    with _CACHE_LOCK:
+        bucket = _USER_CACHE.get(user_id)
+        if bucket is not None:
+            exact = set(keys)
+            prefixes = tuple(prefixes)
+            for key in list(bucket):
+                if key in exact or (prefixes and key.startswith(prefixes)):
+                    bucket.pop(key, None)
+            if not bucket:
+                _USER_CACHE.pop(user_id, None)
+        _ADMIN_CACHE.clear()
+
+
+def invalidate_daily_profit_cache(user_id):
+    """일별 장부 수정 시 영향을 받는 금융 파생 캐시만 제거."""
+    invalidate_user_cache_keys(
+        user_id,
+        keys=('monthly_summary', 'dow_avg', 'display_components', 'input_cache'),
+        prefixes=('daily_', 'analysis:', 'weekly_stats:', 'dashboard_ctx:', 'calendar_ctx:')
+    )
+
+
+def invalidate_extra_profit_cache(user_id):
+    """잡이익 변경은 일별 원장/계산기/영업일 설정 캐시를 건드리지 않는다."""
+    invalidate_user_cache_keys(
+        user_id,
+        keys=('monthly_summary', 'display_extras'),
+        prefixes=('weekly_stats:', 'dashboard_ctx:', 'calendar_ctx:')
+    )
 
 
 # Schema initialization is an explicit operator step: python manage_db.py init.
@@ -274,6 +308,7 @@ def warm_up_cache(user_id=1):
                     now = datetime.datetime.now()
                     get_cached_monthly_summary(conn, user_id)
                     get_cached_current_month_dailies(conn, user_id, now.year, now.month)
+                    get_cached_analysis_rows(conn, user_id, now.year, now.month)
                     get_cached_dow_avg(conn, user_id)
                     get_cached_business_schedule(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
@@ -368,6 +403,30 @@ def load_analysis_rows(conn, user_id, year, month):
         "(date BETWEEN ? AND ? OR date BETWEEN ? AND ?) ORDER BY date",
         (user_id, start.isoformat(), end.isoformat(), recent_start.isoformat(), recent_end.isoformat())
     ).fetchall()]
+
+
+def get_cached_analysis_rows(conn=None, user_id=None, year=None, month=None):
+    """대시보드·달력이 공유하는 일별 분석 스냅샷 캐시."""
+    now = time.time()
+    cache_key = f"analysis:{year:04d}-{month:02d}:{korea_today().isoformat()}"
+    with _CACHE_LOCK:
+        entry = (_USER_CACHE.get(user_id) or {}).get(cache_key)
+        if entry and (now - entry['ts'] < _CACHE_TTL):
+            return entry['data']
+
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        data = load_analysis_rows(conn, user_id, year, month)
+        with _CACHE_LOCK:
+            bucket = _USER_CACHE.setdefault(user_id, {})
+            bucket[cache_key] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
 
 
 def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
@@ -681,7 +740,7 @@ def dashboard():
         # [초고속 스마트 캐시 2] 당월 daily_profit 데이터 캐시 조회 (캐시 히트 시 DB 0ms)
         cur_year = current_month['year']
         cur_month = current_month['month']
-        analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
+        analysis_rows = get_cached_analysis_rows(conn, user_id, cur_year, cur_month)
         cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
         schedule = get_cached_business_schedule(conn, user_id)
 
@@ -775,7 +834,7 @@ def input_sales():
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
                 ''', (user_id, date_str, dow, dispensing, daily_net, dpd, non_insurance, total, memo))
                 recalc_monthly_summary(conn, user_id, dt.year, dt.month)
-                invalidate_user_cache(user_id)
+                invalidate_daily_profit_cache(user_id)
                 flash(f'{date_str} ({dow}) 순익이 저장되었습니다. 합계: {total:,}원', 'success')
             except Exception as e:
                 try:
@@ -860,7 +919,12 @@ def save_business_schedule():
         conn.commit()
     finally:
         conn.close()
-    invalidate_user_cache(session['user_id'])
+    user_id = session['user_id']
+    invalidate_user_cache_keys(
+        user_id,
+        keys=('business_schedule',),
+        prefixes=('dashboard_ctx:', 'calendar_ctx:')
+    )
     flash('영업 일정이 저장되었습니다. 예측과 미입력일을 다시 계산했습니다.', 'success')
     return redirect(url_for('calendar_view', year=year, month=month))
 
@@ -909,7 +973,7 @@ def calendar_view():
         prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
         next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
 
-        analysis_rows = load_analysis_rows(conn, user_id, year, month)
+        analysis_rows = get_cached_analysis_rows(conn, user_id, year, month)
         rows = [r for r in analysis_rows if r['date'].startswith(f'{year:04d}-{month:02d}-')]
 
         profit_by_day = {}
@@ -1335,7 +1399,7 @@ def save_calculator_settings():
             conn.execute(f"INSERT INTO user_calculator_settings ({col_clause}) VALUES ({val_clause})", params)
 
         conn.commit()
-        invalidate_user_cache(user_id)
+        invalidate_user_cache_keys(user_id, keys=('calculator_settings',))
     finally:
         conn.close()
     return jsonify({'success': True, 'message': '계산기 설정값이 안전하게 저장되었습니다.'})
@@ -1469,7 +1533,7 @@ def upload_excel():
                     recalc_monthly_summary(conn, user_id, yr, mo, commit=False)
 
                 conn.commit()
-                invalidate_user_cache(user_id)
+                invalidate_daily_profit_cache(user_id)
                 flash(f'🎉 표준 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 데이터가 등록되었습니다)', 'success')
                 return redirect(url_for('dashboard'))
 
@@ -1576,7 +1640,7 @@ def upload_excel():
                         pass
 
             conn.commit()
-            invalidate_user_cache(user_id)
+            invalidate_daily_profit_cache(user_id)
             flash(f'🎉 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 순익 데이터가 등록되었습니다)', 'success')
         finally:
             conn.close()
