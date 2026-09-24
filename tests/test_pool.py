@@ -6,16 +6,18 @@ if database.psycopg2 is None:
     pytest.skip("psycopg2 is not installed (PostgreSQL-only tests)", allow_module_level=True)
 
 class Connection:
-    __slots__ = ('closed', 'pings', 'bad', 'cursor_closed', '__weakref__')
+    __slots__ = ('closed', 'pings', 'bad', 'cursor_closed', 'autocommit', 'rollbacks', '__weakref__')
     def __init__(self, bad=False):
         self.closed = False
         self.pings = 0
         self.bad = bad
         self.cursor_closed = False
+        self.autocommit = False
+        self.rollbacks = 0
     def cursor(self):
         connection = self
         class Cursor:
-            def execute(self, sql):
+            def execute(self, sql, params=()):
                 connection.pings += 1
                 if connection.bad:
                     raise RuntimeError('disconnected')
@@ -23,6 +25,7 @@ class Connection:
                 connection.cursor_closed = True
         return Cursor()
     def rollback(self):
+        self.rollbacks += 1
         if self.bad:
             raise RuntimeError('disconnected')
     def close(self):
@@ -62,6 +65,21 @@ def test_reuses_realistic_connection_without_leaking(pool):
     assert pool.discarded == 0
     assert pool.conn.pings == 1
     assert pool.conn.cursor_closed
+
+
+def test_read_only_checkout_avoids_rollback_round_trip_and_resets_for_writes(pool):
+    read = database.get_db()
+    before = pool.conn.rollbacks
+    read.use_autocommit_reads()
+    assert pool.conn.autocommit is True
+    read.execute('SELECT 1')
+    read.close()
+    assert pool.conn.rollbacks == before
+    assert pool.conn.autocommit is False
+    write = database.get_db()
+    write.close()
+    assert pool.conn.rollbacks == before + 1
+    assert pool.checked_out == 0
 
 def test_replaces_stale_connection_once(pool):
     pool.conn.bad = True

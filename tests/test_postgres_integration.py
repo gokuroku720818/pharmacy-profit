@@ -64,6 +64,26 @@ def test_real_postgres_rollback_prevents_transaction_leak(postgres_pool):
         two.close()
 
 
+def test_real_postgres_read_checkout_returns_transactional_connection(postgres_pool):
+    read = database.get_db()
+    try:
+        read.use_autocommit_reads()
+        assert read.execute('SELECT 1 AS value').fetchone()['value'] == 1
+    finally:
+        read.close()
+    write = database.get_db()
+    try:
+        assert write.conn.autocommit is False
+        write.execute('CREATE TEMP TABLE perf_ci_read_reset (id integer)')
+    finally:
+        write.close()
+    check = database.get_db()
+    try:
+        assert check.execute("SELECT to_regclass('pg_temp.perf_ci_read_reset') AS relation").fetchone()['relation'] is None
+    finally:
+        check.close()
+
+
 def test_real_postgres_four_concurrent_requests_release_connections(postgres_pool):
     barrier = threading.Barrier(4)
 

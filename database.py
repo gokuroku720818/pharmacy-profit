@@ -62,6 +62,16 @@ class PostgresConnectionWrapper:
         self.conn = conn
         self.from_pool = from_pool
         self._closed = False
+        self._autocommit_reads = False
+
+    def use_autocommit_reads(self):
+        """Skip an empty read transaction's network rollback at checkout end.
+
+        Call before the first query, only from routes that never write.
+        The pool's connection is returned to normal transaction mode on close.
+        """
+        self.conn.autocommit = True
+        self._autocommit_reads = True
 
     def __enter__(self):
         return self
@@ -85,6 +95,8 @@ class PostgresConnectionWrapper:
             self.conn = pool.getconn()
             self.from_pool = True
             self._closed = False
+            if self._autocommit_reads:
+                self.conn.autocommit = True
             return
         try:
             self.conn.close()
@@ -95,6 +107,8 @@ class PostgresConnectionWrapper:
             self.conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor, connect_timeout=10)
             self.from_pool = False
             self._closed = False
+            if self._autocommit_reads:
+                self.conn.autocommit = True
 
     def cursor(self):
         return PostgresCursorWrapper(self.conn.cursor())
@@ -134,7 +148,11 @@ class PostgresConnectionWrapper:
             if pool:
                 discard = bool(self.conn.closed)
                 try:
-                    self.conn.rollback()
+                    if self._autocommit_reads:
+                        # No transaction was opened by read queries in this mode.
+                        self.conn.autocommit = False
+                    else:
+                        self.conn.rollback()
                 except Exception:
                     discard = True
                 with _pg_usage_lock:
