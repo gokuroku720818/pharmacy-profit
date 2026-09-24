@@ -624,10 +624,13 @@ def dashboard():
     user_id = session['user_id']
     now = time.time()
     dashboard_cache_key = f"dashboard_ctx:{korea_today().isoformat()}"
+    cached_dashboard_ctx = None
     with _CACHE_LOCK:
         cached = (_USER_CACHE.get(user_id) or {}).get(dashboard_cache_key)
         if cached and (now - cached['ts'] < _CACHE_TTL):
-            return render_template('dashboard.html', **cached['data'])
+            cached_dashboard_ctx = cached['data']
+    if cached_dashboard_ctx is not None:
+        return render_template('dashboard.html', **cached_dashboard_ctx)
 
     conn = get_db()
     try:
@@ -873,11 +876,14 @@ def calendar_view():
         f"calendar_ctx:{requested_year if requested_year is not None else 'default'}:"
         f"{requested_month if requested_month is not None else 'default'}:{korea_today().isoformat()}"
     )
+    cached_calendar_ctx = None
     with _CACHE_LOCK:
         cached = (_USER_CACHE.get(user_id) or {}).get(calendar_cache_key)
         if cached and (now - cached['ts'] < _CACHE_TTL):
-            session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
-            return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **cached['data'])
+            cached_calendar_ctx = cached['data']
+    if cached_calendar_ctx is not None:
+        session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
+        return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **cached_calendar_ctx)
 
     conn = get_db()
     try:
