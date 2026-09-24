@@ -359,6 +359,20 @@ function updatePreview() {
     document.getElementById(id).addEventListener('input', updatePreview);
 });
 
+// 데이팜 자동 연동 파라미터 지원 (URL ?dispensing_fee=...&daily_net_profit=...&non_insurance_margin=...)
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('dispensing_fee') || urlParams.has('daily_net_profit') || urlParams.has('non_insurance_margin')) {
+    if (urlParams.has('date')) document.getElementById('date').value = urlParams.get('date');
+    if (urlParams.has('dispensing_fee')) document.getElementById('dispensing_fee').value = urlParams.get('dispensing_fee');
+    if (urlParams.has('daily_net_profit')) document.getElementById('daily_net_profit').value = urlParams.get('daily_net_profit');
+    if (urlParams.has('non_insurance_margin')) document.getElementById('non_insurance_margin').value = urlParams.get('non_insurance_margin');
+    if (urlParams.has('memo')) {
+        document.getElementById('memo').value = urlParams.get('memo');
+    } else {
+        document.getElementById('memo').value = '데이팜 자동 연동';
+    }
+}
+
 updatePreview();
 recalcFromShots();
 </script>
