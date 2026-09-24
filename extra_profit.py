@@ -5,7 +5,7 @@ import secrets
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 from database import get_db
-from profit_analysis import korea_today
+import profit_analysis
 
 bp = Blueprint('extra_profit', __name__)
 
@@ -118,7 +118,7 @@ def view():
         flash('잡이익이 저장되었습니다.', 'success')
         return redirect(url_for('extra_profit.view', year=int(day[:4]), month=int(day[5:7])))
 
-    today = korea_today()
+    today = profit_analysis.korea_today()
     year = request.args.get('year', today.year, type=int)
     month = request.args.get('month', today.month, type=int)
     if not 2000 <= year <= 2100 or not 1 <= month <= 12:
