@@ -63,8 +63,8 @@ def test_reuses_realistic_connection_without_leaking(pool):
         conn.close()
     assert pool.checked_out == 0
     assert pool.discarded == 0
-    assert pool.conn.pings == 1
-    assert pool.conn.cursor_closed
+    assert pool.conn.pings == 0
+    assert not pool.conn.cursor_closed
 
 
 def test_read_only_checkout_avoids_rollback_round_trip_and_resets_for_writes(pool):
@@ -81,10 +81,25 @@ def test_read_only_checkout_avoids_rollback_round_trip_and_resets_for_writes(poo
     assert pool.conn.rollbacks == before + 1
     assert pool.checked_out == 0
 
-def test_replaces_stale_connection_once(pool):
-    pool.conn.bad = True
+def test_replaces_stale_connection_on_first_real_query(monkeypatch):
+    class RecoveringConnection(Connection):
+        def cursor(self):
+            if self.bad:
+                raise database.psycopg2.OperationalError('connection lost')
+            return super().cursor()
+
+    pool = Pool(RecoveringConnection(bad=True))
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://test.invalid/test')
+    monkeypatch.setattr(database, 'get_pg_pool', lambda: pool)
+    monkeypatch.setattr(
+        database.psycopg2, 'connect',
+        lambda *a, **kw: pytest.fail('pooled recovery must not open an unpooled connection')
+    )
+
     conn = database.get_db()
+    conn.execute('SELECT 1')
     conn.close()
+
     assert pool.discarded == 1
     assert pool.checked_out == 0
 
@@ -96,13 +111,39 @@ def test_rollback_failure_discards_connection(pool):
     assert pool.checked_out == 0
 
 
-def test_idle_connection_is_checked_again(pool, monkeypatch):
+def test_stale_read_reconnect_keeps_autocommit_mode(monkeypatch):
+    class RecoveringConnection(Connection):
+        def cursor(self):
+            if self.bad:
+                raise database.psycopg2.OperationalError('connection lost')
+            return super().cursor()
+
+    pool = Pool(RecoveringConnection(bad=True))
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://test.invalid/test')
+    monkeypatch.setattr(database, 'get_pg_pool', lambda: pool)
+    monkeypatch.setattr(
+        database.psycopg2, 'connect',
+        lambda *a, **kw: pytest.fail('pooled recovery must not open an unpooled connection')
+    )
+
+    read = database.get_db()
+    read.use_autocommit_reads()
+    read.execute('SELECT 1')
+    assert read.conn.autocommit is True
+    read.close()
+
+    assert pool.discarded == 1
+    assert pool.checked_out == 0
+    assert pool.conn.autocommit is False
+
+
+def test_idle_checkout_does_not_send_preflight_query(pool, monkeypatch):
     clock = [100.0]
     monkeypatch.setattr(database.time, 'monotonic', lambda: clock[0])
     database.get_db().close()
     clock[0] += 61
     database.get_db().close()
-    assert pool.conn.pings == 2
+    assert pool.conn.pings == 0
     assert pool.checked_out == 0
 
 
