@@ -5,6 +5,7 @@ import secrets
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 from database import get_db
+from profit_analysis import korea_today
 
 bp = Blueprint('extra_profit', __name__)
 
@@ -72,8 +73,8 @@ def _validate():
 
 def _invalidate(user_id):
     # This import runs after app startup, avoiding a module import cycle.
-    from app import invalidate_user_cache
-    invalidate_user_cache(user_id)
+    from app import invalidate_extra_profit_cache
+    invalidate_extra_profit_cache(user_id)
 
 
 @bp.before_request
@@ -117,7 +118,7 @@ def view():
         flash('잡이익이 저장되었습니다.', 'success')
         return redirect(url_for('extra_profit.view', year=int(day[:4]), month=int(day[5:7])))
 
-    today = datetime.date.today()
+    today = korea_today()
     year = request.args.get('year', today.year, type=int)
     month = request.args.get('month', today.month, type=int)
     if not 2000 <= year <= 2100 or not 1 <= month <= 12:
@@ -126,9 +127,11 @@ def view():
     session.setdefault('extra_profit_csrf', secrets.token_urlsafe(32))
     conn = get_db()
     try:
+        month_start = datetime.date(year, month, 1)
+        next_month = (month_start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
         rows = conn.execute('''SELECT id, date, amount, memo FROM extra_profit
-             WHERE user_id=? AND date LIKE ? ORDER BY date DESC,id DESC''',
-             (user_id, f'{year}-{month:02d}%')).fetchall()
+             WHERE user_id=? AND date >= ? AND date < ? ORDER BY date DESC,id DESC''',
+             (user_id, month_start.isoformat(), next_month.isoformat())).fetchall()
         entries = [dict(r) for r in rows]
         editing = None
         if edit_id:
