@@ -312,7 +312,6 @@ def warm_up_cache(user_id=1):
 
     def _worker():
         try:
-            time.sleep(0.5)  # 서버 및 커넥션 풀 초기화 대기
             with app.app_context():
                 conn = get_db()
                 try:
