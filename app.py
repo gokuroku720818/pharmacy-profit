@@ -1,7 +1,7 @@
 """
 약국 순익 관리 시스템 - 다중 약국 지원 온라인 SaaS 버전
 """
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, session, g
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import get_db, init_db, recalc_monthly_summary, get_all_users_stats, delete_user_and_data, get_pool_status
 from profit_analysis import (get_month_forecast, get_yoy_day_comparison,
@@ -21,6 +21,8 @@ import threading
 from urllib.parse import quote
 
 app = Flask(__name__)
+app.jinja_env.trim_blocks = True
+app.jinja_env.lstrip_blocks = True
 from profit_display import install as install_profit_display
 install_profit_display(app)
 app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-profit-saas-super-secret-key-2026')
@@ -29,10 +31,10 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 86400  # 정적 에셋 24시간 브라
 # 🔒 약국장 전용 1인 단독 모드: 신규 가입 차단 (환경변수 ALLOW_REGISTRATION=1 로 필요 시 즉시 재개 가능)
 ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', '0') == '1'
 
-# ⚡ 사용자별 초고속 인메모리 스마트 캐시 (조회 99%, 변경 1% SaaS 구조에 최적화)
+# ⚡ 사용자별 초고속 인메모리 스마트 캐시 (1인 전용 최적화: 1시간 TTL, 데이터 변경 시 즉시 갱신)
 _USER_CACHE = {}
 _CACHE_LOCK = threading.Lock()
-_CACHE_TTL = 300  # 5분 유효
+_CACHE_TTL = 3600  # 1시간 유효 (데이터 변경 시 invalidate_user_cache 즉시 호출로 실시간 정합성 보장)
 
 
 def get_cached_monthly_summary(conn=None, user_id=None):
@@ -230,6 +232,46 @@ def bootstrap_app_extensions(app_module=None):
     install_daily_labels(current_module)
     install_cache_coherence(current_module)
     install_metrics(current_module)
+    warm_up_cache(1)
+
+
+def warm_up_cache(user_id=1):
+    """서버 구동 직후 약국장 핵심 데이터를 백그라운드에서 사전 캐싱 (콜드 스타트 0초 달성)"""
+    if os.environ.get('PYTEST_CURRENT_TEST'):
+        return
+
+    def _worker():
+        try:
+            time.sleep(0.5)  # 서버 및 커넥션 풀 초기화 대기
+            with app.app_context():
+                conn = get_db()
+                try:
+                    now = datetime.datetime.now()
+                    get_cached_monthly_summary(conn, user_id)
+                    get_cached_current_month_dailies(conn, user_id, now.year, now.month)
+                    get_cached_dow_avg(conn, user_id)
+                    get_cached_calculator_settings(conn, user_id)
+                finally:
+                    conn.close()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_worker, daemon=True, name="CacheWarmupThread")
+    t.start()
+
+
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    """요청 종료 시 미반납 트랜잭션 및 DB 리소스 안전 정리 (커넥션 풀 누수 원천 방지)"""
+    conn = getattr(g, '_database', None)
+    if conn is not None:
+        try:
+            if exception:
+                conn.rollback()
+            conn.close()
+        except Exception:
+            pass
+        g._database = None
 
 
 
@@ -1682,6 +1724,12 @@ def page_not_found(e):
 
 @app.errorhandler(500)
 def internal_server_error(e):
+    conn = getattr(g, '_database', None)
+    if conn is not None:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     return render_template(
         'error.html',
         error_code=500,

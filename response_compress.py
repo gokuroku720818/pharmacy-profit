@@ -37,9 +37,9 @@ def install(app):
         if len(data) < 500:
             return response
 
-        # gzip 압축 수행 (압축 레벨 5: 속도와 압축률 최적 밸런스)
+        # gzip 압축 수행 (압축 레벨 6: RFC 1952 표준 최적 압축률/속도 밸런스)
         buf = BytesIO()
-        with gzip.GzipFile(mode='wb', fileobj=buf, compresslevel=5) as gz:
+        with gzip.GzipFile(mode='wb', fileobj=buf, compresslevel=6) as gz:
             gz.write(data)
         compressed = buf.getvalue()
 

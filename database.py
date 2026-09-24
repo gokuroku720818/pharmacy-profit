@@ -49,6 +49,14 @@ def get_pool_status():
     }
 
 
+def _is_connection_dead(exc):
+    """PostgreSQL 소켓 단절, 타임아웃, EOF 등 일시적 유휴 끊김 에러 감지"""
+    if psycopg2 and isinstance(exc, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+        return True
+    msg = str(exc).lower()
+    return any(p in msg for p in ('closed', 'terminating', 'eof', 'connection', 'broken pipe', 'server closed'))
+
+
 class PostgresConnectionWrapper:
     def __init__(self, conn, from_pool=False):
         self.conn = conn
@@ -62,19 +70,54 @@ class PostgresConnectionWrapper:
         self.close()
         return False
 
+    def _reconnect(self):
+        """죽은 소켓 감지 시 커넥션을 안전하게 재생성하여 투명 복구"""
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+        db_url = get_database_url()
+        pool = get_pg_pool() if self.from_pool else None
+        if pool:
+            try:
+                self.conn = pool.getconn()
+                self._closed = False
+                return
+            except Exception:
+                pass
+        if db_url and psycopg2:
+            self.conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor, connect_timeout=10)
+            self.from_pool = False
+            self._closed = False
+
     def cursor(self):
         return PostgresCursorWrapper(self.conn.cursor())
 
     def execute(self, sql, params=None):
-        cur = self.cursor()
-        cur.execute(sql, params)
-        return cur
+        try:
+            cur = self.cursor()
+            cur.execute(sql, params)
+            return cur
+        except Exception as exc:
+            if _is_connection_dead(exc):
+                # 일시적 연결 단절 시 1회 자동 재연결 및 재시도로 500 에러 원천 방지
+                try:
+                    self._reconnect()
+                    cur = self.cursor()
+                    cur.execute(sql, params)
+                    return cur
+                except Exception:
+                    raise exc
+            raise
 
     def commit(self):
         self.conn.commit()
 
     def rollback(self):
-        self.conn.rollback()
+        try:
+            self.conn.rollback()
+        except Exception:
+            pass
 
     def close(self):
         if self._closed:
@@ -93,9 +136,16 @@ class PostgresConnectionWrapper:
                         _pg_last_used.pop(self.conn, None)
                     else:
                         _pg_last_used[self.conn] = time.monotonic()
-                pool.putconn(self.conn, close=discard)
+                try:
+                    pool.putconn(self.conn, close=discard)
+                except Exception:
+                    pass
                 return
-        self.conn.close()
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
 
 
 def get_db():
@@ -483,9 +533,11 @@ def init_sqlite_db():
         pass
 
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date ON daily_profit(user_id, date)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date_desc ON daily_profit(user_id, date DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_dow ON daily_profit(user_id, total, day_of_week)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_ym ON monthly_summary(user_id, year, month)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_gt ON monthly_summary(user_id, grand_total)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_calc_user ON user_calculator_settings(user_id)')
 
     conn.commit()
     conn.close()
@@ -584,9 +636,11 @@ def init_postgres_db(db_url):
         pass
 
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_date ON daily_profit(user_id, date)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_date_desc ON daily_profit(user_id, date DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_dow ON daily_profit(user_id, total, day_of_week)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_ym ON monthly_summary(user_id, year, month)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_gt ON monthly_summary(user_id, grand_total)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_calc_user ON user_calculator_settings(user_id)')
     conn.commit()
 
     # 4. 기존 데이터가 비어있다면 로컬 sales.db 에서 Neon DB로 자동 마이그레이션
