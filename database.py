@@ -65,13 +65,19 @@ class PostgresConnectionWrapper:
         self._autocommit_reads = False
 
     def use_autocommit_reads(self):
-        """Skip an empty read transaction's network rollback at checkout end.
+        """Skip an empty read transaction's rollback round trip.
 
-        Call before the first query, only from routes that never write.
-        The pool's connection is returned to normal transaction mode on close.
+        A stale pooled socket is retried lazily on the first real operation,
+        avoiding a separate SELECT 1 probe before every idle checkout.
         """
-        self.conn.autocommit = True
         self._autocommit_reads = True
+        try:
+            self.conn.autocommit = True
+        except Exception as exc:
+            if not _is_connection_dead(exc):
+                raise
+            self._reconnect()
+            self.conn.autocommit = True
 
     def __enter__(self):
         return self
@@ -178,30 +184,19 @@ def get_db():
     if db_url and psycopg2:
         pool = get_pg_pool()
         if pool:
-            # psycopg2 connections do not accept custom Python attributes.
-            # Retry one stale connection; never leave a checked-out connection behind.
+            # Avoid a preflight SELECT 1 round trip. Dead sockets are retried by
+            # PostgresConnectionWrapper on the first actual operation.
             for _ in range(2):
                 try:
                     pg_conn = pool.getconn()
                 except psycopg2.pool.PoolError:
                     break
-                try:
-                    with _pg_usage_lock:
-                        last_used = _pg_last_used.get(pg_conn)
-                    if pg_conn.closed:
-                        raise psycopg2.InterfaceError("Closed pooled connection")
-                    if last_used is None or time.monotonic() - last_used > 60:
-                        cursor = pg_conn.cursor()
-                        try:
-                            cursor.execute("SELECT 1")
-                        finally:
-                            cursor.close()
-                        pg_conn.rollback()
-                    return PostgresConnectionWrapper(pg_conn, from_pool=True)
-                except Exception:
+                if pg_conn.closed:
                     with _pg_usage_lock:
                         _pg_last_used.pop(pg_conn, None)
                     pool.putconn(pg_conn, close=True)
+                    continue
+                return PostgresConnectionWrapper(pg_conn, from_pool=True)
         pg_conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor, connect_timeout=10)
         return PostgresConnectionWrapper(pg_conn, from_pool=False)
     else:
