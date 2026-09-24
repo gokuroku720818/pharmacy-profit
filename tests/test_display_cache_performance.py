@@ -52,3 +52,15 @@ def test_display_aggregations_refresh_after_invalidation(service, conn, monkeypa
     assert '150원' in html
     assert '650원' in html
     assert sum('FROM daily_profit' in sql for sql in queries) == 1, queries
+
+
+def test_analysis_snapshot_omits_large_input_memos(service, conn):
+    add(conn, '2026-09-01')
+    conn.execute("UPDATE daily_profit SET memo = ? WHERE date = '2026-09-01'", ('x' * 100_000,))
+    conn.commit()
+
+    rows = service.load_analysis_rows(conn, 1, 2026, 9)
+    assert len(rows) == 1
+    assert rows[0]['total'] == 130
+    assert rows[0]['dispensing_fee'] == 100
+    assert 'memo' not in rows[0]

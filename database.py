@@ -72,19 +72,25 @@ class PostgresConnectionWrapper:
 
     def _reconnect(self):
         """죽은 소켓 감지 시 커넥션을 안전하게 재생성하여 투명 복구"""
+        pool = get_pg_pool() if self.from_pool else None
+        if pool:
+            old_conn = self.conn
+            with _pg_usage_lock:
+                _pg_last_used.pop(old_conn, None)
+            # A checked-out connection must be returned before requesting its
+            # replacement, especially when the pool has reached maxconn.
+            self._closed = True
+            pool.putconn(old_conn, close=True)
+            self.from_pool = False
+            self.conn = pool.getconn()
+            self.from_pool = True
+            self._closed = False
+            return
         try:
             self.conn.close()
         except Exception:
             pass
         db_url = get_database_url()
-        pool = get_pg_pool() if self.from_pool else None
-        if pool:
-            try:
-                self.conn = pool.getconn()
-                self._closed = False
-                return
-            except Exception:
-                pass
         if db_url and psycopg2:
             self.conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor, connect_timeout=10)
             self.from_pool = False

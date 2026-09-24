@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  sqlite-and-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt pytest
+      - name: Run synthetic-data regression suite
+        run: python -m pytest -q
+      - name: Boot configured worker without financial seed data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pharmacy-smoke"
+          tar --exclude='./data' --exclude='./.git' -cf - . | tar -xf - -C "$RUNNER_TEMP/pharmacy-smoke"
+          cd "$RUNNER_TEMP/pharmacy-smoke"
+          export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          gunicorn -c gunicorn.conf.py -b 127.0.0.1:8765 app:app &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:8765/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1

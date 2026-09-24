@@ -336,7 +336,9 @@ def load_analysis_rows(conn, user_id, year, month):
     recent_start = today - datetime.timedelta(days=55)
     recent_end = today + datetime.timedelta(days=6 - today.weekday())
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM daily_profit WHERE user_id = ? AND "
+        "SELECT date, day_of_week, dispensing_fee, daily_net_profit, "
+        "dispensing_plus_daily, non_insurance_margin, total "
+        "FROM daily_profit WHERE user_id = ? AND "
         "(date BETWEEN ? AND ? OR date BETWEEN ? AND ?) ORDER BY date",
         (user_id, start.isoformat(), end.isoformat(), recent_start.isoformat(), recent_end.isoformat())
     ).fetchall()]
