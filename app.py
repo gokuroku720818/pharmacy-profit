@@ -138,6 +138,29 @@ def get_cached_dow_avg(conn=None, user_id=None):
             conn.close()
 
 
+def get_cached_business_schedule(conn=None, user_id=None):
+    """영업일 설정 캐시. 저장 시 사용자 캐시 전체가 무효화되어 즉시 갱신된다."""
+    now = time.time()
+    with _CACHE_LOCK:
+        entry = (_USER_CACHE.get(user_id) or {}).get('business_schedule')
+        if entry and (now - entry['ts'] < _CACHE_TTL):
+            return entry['data']
+
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        data = get_business_schedule(conn, user_id)
+        with _CACHE_LOCK:
+            bucket = _USER_CACHE.setdefault(user_id, {})
+            bucket['business_schedule'] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
+
+
 # ⚡ 관리자 콘솔 스마트 캐시
 _ADMIN_CACHE = {}
 
@@ -252,6 +275,7 @@ def warm_up_cache(user_id=1):
                     get_cached_monthly_summary(conn, user_id)
                     get_cached_current_month_dailies(conn, user_id, now.year, now.month)
                     get_cached_dow_avg(conn, user_id)
+                    get_cached_business_schedule(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
                 finally:
                     conn.close()
@@ -598,8 +622,13 @@ def logout():
 @login_required
 def dashboard():
     user_id = session['user_id']
-
     now = time.time()
+    dashboard_cache_key = f"dashboard_ctx:{korea_today().isoformat()}"
+    with _CACHE_LOCK:
+        cached = (_USER_CACHE.get(user_id) or {}).get(dashboard_cache_key)
+        if cached and (now - cached['ts'] < _CACHE_TTL):
+            return render_template('dashboard.html', **cached['data'])
+
     conn = get_db()
     try:
         if hasattr(conn, 'use_autocommit_reads'):
@@ -619,7 +648,7 @@ def dashboard():
                 'diff': int(last_r['prev_month_diff'] or 0)
             }
         else:
-            now_dt = datetime.date.today()
+            now_dt = korea_today()
             current_month = {'year': now_dt.year, 'month': now_dt.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0}
 
         monthly_data = {
@@ -651,7 +680,7 @@ def dashboard():
         cur_month = current_month['month']
         analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
         cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
-        schedule = get_business_schedule(conn, user_id)
+        schedule = get_cached_business_schedule(conn, user_id)
 
         # [초고속 스마트 캐시 3] 요일별 평균 캐시 조회 (캐시 히트 시 DB 0ms)
         dow_avg = None
@@ -702,12 +731,10 @@ def dashboard():
             'weekly_stats': weekly_stats
         }
 
-        # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
-        recent_preload = [dict(r) for r in reversed(cur_month_rows[-20:])] if cur_month_rows else []
+        # 완성된 금융 컨텍스트를 캐시해 반복 대시보드 요청의 원격 DB 왕복을 제거한다.
         with _CACHE_LOCK:
-            if user_id not in _USER_CACHE:
-                _USER_CACHE[user_id] = {}
-            _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
+            bucket = _USER_CACHE.setdefault(user_id, {})
+            bucket[dashboard_cache_key] = {'ts': now, 'data': dashboard_ctx}
     finally:
         conn.close()
 
@@ -839,6 +866,19 @@ def save_business_schedule():
 @login_required
 def calendar_view():
     user_id = session['user_id']
+    now = time.time()
+    requested_year = request.args.get('year', type=int)
+    requested_month = request.args.get('month', type=int)
+    calendar_cache_key = (
+        f"calendar_ctx:{requested_year if requested_year is not None else 'default'}:"
+        f"{requested_month if requested_month is not None else 'default'}:{korea_today().isoformat()}"
+    )
+    with _CACHE_LOCK:
+        cached = (_USER_CACHE.get(user_id) or {}).get(calendar_cache_key)
+        if cached and (now - cached['ts'] < _CACHE_TTL):
+            session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
+            return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **cached['data'])
+
     conn = get_db()
     try:
         if hasattr(conn, 'use_autocommit_reads'):
@@ -882,33 +922,35 @@ def calendar_view():
         dow_avg = None
         last_year_total = next((int(r['grand_total']) for r in m_rows if int(r['year']) == year - 1 and int(r['month']) == month), 0)
 
-        business_schedule = get_business_schedule(conn, user_id)
+        business_schedule = get_cached_business_schedule(conn, user_id)
         forecast = get_month_forecast(conn, user_id, year, month, entered_rows=rows,
             last_year_total=last_year_total, schedule=business_schedule,
             history_rows=analysis_rows, month_summary_row=month_summary or {})
 
     finally:
         conn.close()
-    session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
+    calendar_ctx = {
+        'year': year,
+        'month': month,
+        'years': years,
+        'prev_year': prev_year,
+        'prev_month': prev_month,
+        'next_year': next_year,
+        'next_month': next_month,
+        'cal_weeks': cal_weeks,
+        'profit_by_day': profit_by_day,
+        'month_summary': month_summary,
+        'total_days_worked': total_days_worked,
+        'avg_daily': avg_daily,
+        'business_schedule': business_schedule,
+        'forecast': forecast,
+    }
+    with _CACHE_LOCK:
+        bucket = _USER_CACHE.setdefault(user_id, {})
+        bucket[calendar_cache_key] = {'ts': now, 'data': calendar_ctx}
 
-    return render_template(
-        'calendar.html',
-        year=year,
-        month=month,
-        years=years,
-        prev_year=prev_year,
-        prev_month=prev_month,
-        next_year=next_year,
-        next_month=next_month,
-        cal_weeks=cal_weeks,
-        profit_by_day=profit_by_day,
-        month_summary=month_summary,
-        total_days_worked=total_days_worked,
-        avg_daily=avg_daily,
-        business_schedule=business_schedule,
-        schedule_csrf=session['schedule_csrf'],
-        forecast=forecast
-    )
+    session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
+    return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **calendar_ctx)
 
 
 @app.route('/report')
