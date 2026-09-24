@@ -27,6 +27,7 @@
         {% endwith %}
 
         <form method="POST" action="/register">
+            <input type="hidden" name="csrf_token" value="{{ form_csrf_token() }}">
             <div class="mb-3">
                 <label for="pharmacy_name" class="form-label small fw-bold">약국 이름</label>
                 <div class="input-group">

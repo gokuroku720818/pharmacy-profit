@@ -102,3 +102,45 @@ def test_exhausted_pool_fallback_is_closed(monkeypatch):
     wrapper = database.get_db()
     wrapper.close()
     assert direct.closed
+
+
+def test_execute_reconnection_returns_failed_pooled_connection(monkeypatch):
+    class RecoveringConnection(Connection):
+        def cursor(self):
+            if self.bad:
+                raise database.psycopg2.OperationalError('connection lost')
+            class Cursor:
+                def execute(self, sql, params=()):
+                    return None
+            return Cursor()
+
+    class LimitedPool:
+        def __init__(self):
+            self.available = [RecoveringConnection(bad=True)]
+            self.in_use = set()
+
+        def getconn(self):
+            if not self.available:
+                raise database.psycopg2.pool.PoolError('pool exhausted')
+            conn = self.available.pop()
+            self.in_use.add(conn)
+            return conn
+
+        def putconn(self, conn, close=False):
+            self.in_use.remove(conn)
+            if close:
+                conn.close()
+                self.available.append(RecoveringConnection())
+            else:
+                self.available.append(conn)
+
+    pool = LimitedPool()
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://test.invalid/test')
+    monkeypatch.setattr(database, 'get_pg_pool', lambda: pool)
+    monkeypatch.setattr(database.psycopg2, 'connect', lambda *a, **kw: pytest.fail('unpooled connection opened'))
+
+    wrapper = database.PostgresConnectionWrapper(pool.getconn(), from_pool=True)
+    wrapper.execute('SELECT 1')
+    wrapper.close()
+    assert not pool.in_use
+    assert len(pool.available) == 1

@@ -11,11 +11,11 @@ def service(tmp_path, monkeypatch):
     monkeypatch.delenv('DATABASE_URL', raising=False)
     import database
     monkeypatch.setattr(database, 'SQLITE_PATH', str(tmp_path / 'sales.db'))
+    database.init_db()
     if 'app' not in sys.modules:
         module = importlib.import_module('app')
     else:
         module = sys.modules['app']
-        database.init_db()
     import profit_analysis
     monkeypatch.setattr(profit_analysis, 'korea_today', lambda: dt.date(2026, 9, 19))
     monkeypatch.setattr(module, 'korea_today', lambda: dt.date(2026, 9, 19))
@@ -137,7 +137,9 @@ def test_annual_briefing_does_not_claim_stability_from_decline(service):
 def client_for(service, user=1):
     client = service.app.test_client()
     with client.session_transaction() as session:
-        session.update(user_id=user, username='tester', pharmacy_name='Test', schedule_csrf='test-token')
+        session.update(user_id=user, username='tester', pharmacy_name='Test',
+                       schedule_csrf='test-token', _form_csrf='test-token')
+    client.environ_base['HTTP_X_CSRF_TOKEN'] = 'test-token'
     return client
 
 
@@ -298,11 +300,14 @@ def test_login_success_and_failure_with_synthetic_credentials(service, conn):
                  ('speed-test-user', generate_password_hash('synthetic-test-password')))
     conn.commit()
     client = service.app.test_client()
-    rejected = client.post('/login', data={'username': 'speed-test-user', 'password': 'wrong'})
+    client.get('/login')
+    with client.session_transaction() as sess:
+        token = sess['_form_csrf']
+    rejected = client.post('/login', data={'csrf_token': token, 'username': 'speed-test-user', 'password': 'wrong'})
     assert rejected.status_code == 200
     with client.session_transaction() as session:
         assert 'user_id' not in session
-    accepted = client.post('/login', data={'username': 'speed-test-user', 'password': 'synthetic-test-password'})
+    accepted = client.post('/login', data={'csrf_token': token, 'username': 'speed-test-user', 'password': 'synthetic-test-password'})
     assert accepted.status_code == 302
     with client.session_transaction() as session:
         assert session['user_id'] == 1

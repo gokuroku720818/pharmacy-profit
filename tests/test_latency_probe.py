@@ -36,6 +36,7 @@ def test_probe_authenticates_and_checks_every_page_without_writes():
             body = self.rfile.read(int(self.headers['Content-Length']))
             assert b'username=test-user' in body
             assert b'password=test-pass' in body
+            assert b'csrf_token=test-csrf-token' in body
             self.send_response(302)
             self.send_header('Set-Cookie', 'sid=ok; Path=/; HttpOnly')
             self.send_header('Location', '/')
@@ -48,7 +49,10 @@ def test_probe_authenticates_and_checks_every_page_without_writes():
             else:
                 self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'ok')
+            if self.path == '/login':
+                self.wfile.write(b'<form><input type="hidden" name="csrf_token" value="test-csrf-token"></form>')
+            else:
+                self.wfile.write(b'ok')
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
