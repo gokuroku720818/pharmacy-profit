@@ -244,13 +244,28 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast, latest_row
 
 
 def generate_annual_narrative_report(year, report_data, year_total, last_year_total,
-                                     best_month, worst_month, quarterly_data):
+                                     best_month, worst_month, quarterly_data,
+                                     comparison_current_total=None, comparison_previous_total=None,
+                                     comparison_label=None, use_period_comparison=False):
     if not report_data:
         return None
     total = int(year_total['grand'])
     paragraphs = [f"{year}년 입력된 {len(report_data)}개월의 합계는 <strong>{total:,}원</strong>, "
                   f"입력월 평균은 {total//len(report_data):,}원입니다."]
-    if last_year_total:
+    if use_period_comparison:
+        if comparison_current_total is not None and comparison_previous_total:
+            change = int(comparison_current_total)-int(comparison_previous_total)
+            direction = '증가' if change > 0 else '감소' if change < 0 else '동일'
+            label = comparison_label or '전년 동일 기간'
+            paragraphs.append(
+                f'{label} 기준으로 {abs(change):,}원 {direction}입니다. '
+                '진행 중인 현재 월은 완료월 비교에서 제외합니다.'
+            )
+        elif last_year_total:
+            paragraphs.append(
+                '전년도 저장 자료는 있으나 같은 기간의 월 자료가 완전하지 않아 증감률을 계산하지 않았습니다.'
+            )
+    elif last_year_total:
         change = total-int(last_year_total['grand'])
         direction = '증가' if change > 0 else '감소' if change < 0 else '동일'
         paragraphs.append(f'전년도 저장 합계와 단순 비교하면 {abs(change):,}원 {direction}입니다. '

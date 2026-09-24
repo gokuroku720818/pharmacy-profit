@@ -16,6 +16,7 @@ _USER_READERS = (
     'get_cached_monthly_summary',
     'get_cached_current_month_dailies',
     'get_cached_dow_avg',
+    'get_cached_business_schedule',
 )
 
 
@@ -51,11 +52,11 @@ def install(module):
 
         setattr(module, name, make_reader(original, params))
 
-    # The dashboard and /input GET each publish an input_cache entry AFTER
-    # several queries. Without covering the whole request, a concurrent
-    # committed write can invalidate and then have that stale entry restored.
+    # Financial GET pages publish user-scoped cache entries after several
+    # queries. Cover the whole request so a committed write cannot invalidate
+    # and then have an older in-flight page restore stale data.
     from flask import request, session
-    for endpoint in ('dashboard', 'input_sales'):
+    for endpoint in ('dashboard', 'calendar_view', 'input_sales'):
         original_view = module.app.view_functions[endpoint]
 
         def make_page(fn, endpoint_name):
@@ -65,17 +66,7 @@ def install(module):
                     return fn(*args, **kwargs)
                 user_id = session['user_id']
                 with for_user(user_id):
-                    response = fn(*args, **kwargs)
-                    if endpoint_name == 'dashboard':
-                        # dashboard preloads only its selected month's daily rows.
-                        # /input promises the latest 20 across ALL months. Its own
-                        # indexed query is authoritative; never reuse this partial
-                        # month snapshot as a complete recent-history cache.
-                        with module._CACHE_LOCK:
-                            bucket = module._USER_CACHE.get(user_id)
-                            if bucket is not None:
-                                bucket.pop('input_cache', None)
-                    return response
+                    return fn(*args, **kwargs)
             return synchronized_page
 
         module.app.view_functions[endpoint] = make_page(original_view, endpoint)

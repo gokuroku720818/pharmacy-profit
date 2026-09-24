@@ -199,13 +199,13 @@
 </div>
 {% endif %}
 
-<!-- ⚖️ 2. 작년 오늘 vs 올해 오늘 & 💊 3. 황금비율 진단 -->
+<!-- ⚖️ 2. 52주 전 동일 요일 비교 & 💊 3. 수익 구성 현황 -->
 <div class="row g-3 mb-4">
-    <!-- 작년 동요일 비교 -->
+    <!-- 52주 전 동일 요일 비교 -->
     <div class="col-lg-6">
         <div class="card border-0 shadow-sm h-100">
             <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <span class="fw-bold"><i class="fas fa-balance-scale text-primary me-2"></i>작년 오늘 vs 올해 오늘 1:1 비교</span>
+                <span class="fw-bold"><i class="fas fa-balance-scale text-primary me-2"></i>52주 전 같은 요일 vs 최근 영업일 비교</span>
                 <span class="badge bg-light text-dark">364일 전 동요일 대조</span>
             </div>
             <div class="card-body">
@@ -219,12 +219,12 @@
                         <span class="badge bg-secondary">VS</span>
                     </div>
                     <div class="text-end">
-                        <small class="text-muted d-block">작년 동요일 ({{ yoy_day.yoy_date }})</small>
+                        <small class="text-muted d-block">52주 전 동일 요일 ({{ yoy_day.yoy_date }})</small>
                         <span class="fs-4 fw-bold text-muted">{{ "{:,}".format(yoy_day.yoy_total) }}원</span>
                     </div>
                 </div>
                 <div class="d-flex justify-content-between align-items-center">
-                    <span class="small text-muted">전년 대비 당일 증감:</span>
+                    <span class="small text-muted">52주 전 동일 요일 대비:</span>
                     <span class="fw-bold fs-5 {% if yoy_day.diff >= 0 %}text-success{% else %}text-danger{% endif %}">
                         {{ "{:+,}".format(yoy_day.diff) }}원 ({{ ("{:+,}".format(yoy_day.growth_pct) ~ "%") if yoy_day.growth_pct is not none else "비교 기준 0원" }})
                     </span>

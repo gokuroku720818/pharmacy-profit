@@ -138,6 +138,29 @@ def get_cached_dow_avg(conn=None, user_id=None):
             conn.close()
 
 
+def get_cached_business_schedule(conn=None, user_id=None):
+    """영업일 설정 캐시. 저장 시 사용자 캐시 전체가 무효화되어 즉시 갱신된다."""
+    now = time.time()
+    with _CACHE_LOCK:
+        entry = (_USER_CACHE.get(user_id) or {}).get('business_schedule')
+        if entry and (now - entry['ts'] < _CACHE_TTL):
+            return entry['data']
+
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        data = get_business_schedule(conn, user_id)
+        with _CACHE_LOCK:
+            bucket = _USER_CACHE.setdefault(user_id, {})
+            bucket['business_schedule'] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
+
+
 # ⚡ 관리자 콘솔 스마트 캐시
 _ADMIN_CACHE = {}
 
@@ -252,6 +275,7 @@ def warm_up_cache(user_id=1):
                     get_cached_monthly_summary(conn, user_id)
                     get_cached_current_month_dailies(conn, user_id, now.year, now.month)
                     get_cached_dow_avg(conn, user_id)
+                    get_cached_business_schedule(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
                 finally:
                     conn.close()
@@ -598,8 +622,16 @@ def logout():
 @login_required
 def dashboard():
     user_id = session['user_id']
-
     now = time.time()
+    dashboard_cache_key = f"dashboard_ctx:{korea_today().isoformat()}"
+    cached_dashboard_ctx = None
+    with _CACHE_LOCK:
+        cached = (_USER_CACHE.get(user_id) or {}).get(dashboard_cache_key)
+        if cached and (now - cached['ts'] < _CACHE_TTL):
+            cached_dashboard_ctx = cached['data']
+    if cached_dashboard_ctx is not None:
+        return render_template('dashboard.html', **cached_dashboard_ctx)
+
     conn = get_db()
     try:
         if hasattr(conn, 'use_autocommit_reads'):
@@ -619,7 +651,7 @@ def dashboard():
                 'diff': int(last_r['prev_month_diff'] or 0)
             }
         else:
-            now_dt = datetime.date.today()
+            now_dt = korea_today()
             current_month = {'year': now_dt.year, 'month': now_dt.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0}
 
         monthly_data = {
@@ -651,7 +683,7 @@ def dashboard():
         cur_month = current_month['month']
         analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
         cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
-        schedule = get_business_schedule(conn, user_id)
+        schedule = get_cached_business_schedule(conn, user_id)
 
         # [초고속 스마트 캐시 3] 요일별 평균 캐시 조회 (캐시 히트 시 DB 0ms)
         dow_avg = None
@@ -702,12 +734,10 @@ def dashboard():
             'weekly_stats': weekly_stats
         }
 
-        # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
-        recent_preload = [dict(r) for r in reversed(cur_month_rows[-20:])] if cur_month_rows else []
+        # 완성된 금융 컨텍스트를 캐시해 반복 대시보드 요청의 원격 DB 왕복을 제거한다.
         with _CACHE_LOCK:
-            if user_id not in _USER_CACHE:
-                _USER_CACHE[user_id] = {}
-            _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
+            bucket = _USER_CACHE.setdefault(user_id, {})
+            bucket[dashboard_cache_key] = {'ts': now, 'data': dashboard_ctx}
     finally:
         conn.close()
 
@@ -839,6 +869,22 @@ def save_business_schedule():
 @login_required
 def calendar_view():
     user_id = session['user_id']
+    now = time.time()
+    requested_year = request.args.get('year', type=int)
+    requested_month = request.args.get('month', type=int)
+    calendar_cache_key = (
+        f"calendar_ctx:{requested_year if requested_year is not None else 'default'}:"
+        f"{requested_month if requested_month is not None else 'default'}:{korea_today().isoformat()}"
+    )
+    cached_calendar_ctx = None
+    with _CACHE_LOCK:
+        cached = (_USER_CACHE.get(user_id) or {}).get(calendar_cache_key)
+        if cached and (now - cached['ts'] < _CACHE_TTL):
+            cached_calendar_ctx = cached['data']
+    if cached_calendar_ctx is not None:
+        session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
+        return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **cached_calendar_ctx)
+
     conn = get_db()
     try:
         if hasattr(conn, 'use_autocommit_reads'):
@@ -882,33 +928,35 @@ def calendar_view():
         dow_avg = None
         last_year_total = next((int(r['grand_total']) for r in m_rows if int(r['year']) == year - 1 and int(r['month']) == month), 0)
 
-        business_schedule = get_business_schedule(conn, user_id)
+        business_schedule = get_cached_business_schedule(conn, user_id)
         forecast = get_month_forecast(conn, user_id, year, month, entered_rows=rows,
             last_year_total=last_year_total, schedule=business_schedule,
             history_rows=analysis_rows, month_summary_row=month_summary or {})
 
     finally:
         conn.close()
-    session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
+    calendar_ctx = {
+        'year': year,
+        'month': month,
+        'years': years,
+        'prev_year': prev_year,
+        'prev_month': prev_month,
+        'next_year': next_year,
+        'next_month': next_month,
+        'cal_weeks': cal_weeks,
+        'profit_by_day': profit_by_day,
+        'month_summary': month_summary,
+        'total_days_worked': total_days_worked,
+        'avg_daily': avg_daily,
+        'business_schedule': business_schedule,
+        'forecast': forecast,
+    }
+    with _CACHE_LOCK:
+        bucket = _USER_CACHE.setdefault(user_id, {})
+        bucket[calendar_cache_key] = {'ts': now, 'data': calendar_ctx}
 
-    return render_template(
-        'calendar.html',
-        year=year,
-        month=month,
-        years=years,
-        prev_year=prev_year,
-        prev_month=prev_month,
-        next_year=next_year,
-        next_month=next_month,
-        cal_weeks=cal_weeks,
-        profit_by_day=profit_by_day,
-        month_summary=month_summary,
-        total_days_worked=total_days_worked,
-        avg_daily=avg_daily,
-        business_schedule=business_schedule,
-        schedule_csrf=session['schedule_csrf'],
-        forecast=forecast
-    )
+    session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
+    return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **calendar_ctx)
 
 
 @app.route('/report')
@@ -920,7 +968,8 @@ def report():
     all_rows = sorted(raw_rows, key=lambda r: (-int(r['year']), int(r['month'])))
 
     years = sorted(list(set(int(r['year']) for r in all_rows)), reverse=True)
-    selected_year = request.args.get('year', years[0] if years else datetime.date.today().year, type=int)
+    today = korea_today()
+    selected_year = request.args.get('year', years[0] if years else today.year, type=int)
     last_year = selected_year - 1
 
     report_data = []
@@ -977,12 +1026,38 @@ def report():
             'grand': last_year_grand
         }
 
-    # 전년 대비 성장률
+    # 전년 비교는 같은 기간끼리만 계산한다. 진행 중인 현재 월은 완료월 비교에서 제외한다.
+    previous_by_month = {
+        int(r['month']): int(r['grand_total'] or 0)
+        for r in all_rows if int(r['year']) == last_year
+    }
+    comparable_rows = [
+        r for r in report_data
+        if not (selected_year == today.year and int(r['month']) >= today.month)
+    ]
+    comparison_months = [int(r['month']) for r in comparable_rows]
+    comparison_complete = bool(comparison_months) and all(m in previous_by_month for m in comparison_months)
+    comparison_current_total = sum(int(r['grand_total']) for r in comparable_rows) if comparison_complete else None
+    comparison_previous_total = (
+        sum(previous_by_month[m] for m in comparison_months) if comparison_complete else None
+    )
     yoy_growth_pct = None
-    yoy_diff = 0
-    if last_year_total and last_year_total['grand'] > 0:
-        yoy_diff = year_total['grand'] - last_year_total['grand']
-        yoy_growth_pct = round((yoy_diff / float(last_year_total['grand'])) * 100, 1)
+    yoy_diff = None
+    yoy_label = None
+    yoy_badge_label = None
+    if comparison_previous_total is not None and comparison_previous_total > 0:
+        yoy_diff = comparison_current_total - comparison_previous_total
+        yoy_growth_pct = round((yoy_diff / float(comparison_previous_total)) * 100, 1)
+        contiguous = comparison_months == list(range(1, max(comparison_months) + 1))
+        if selected_year == today.year:
+            yoy_label = (
+                f"전년 동기간 증감률 (1~{max(comparison_months)}월)"
+                if contiguous else "전년 동일 완료월 증감률"
+            )
+            yoy_badge_label = "전년동기간"
+        else:
+            yoy_label = "전년 동일 입력월 증감률"
+            yoy_badge_label = "전년동월"
 
     # 최고/최저 실적 달
     best_month = max(report_data, key=lambda r: r['grand_total']) if report_data else None
@@ -1011,7 +1086,11 @@ def report():
 
     # 연간 줄글 분석 생성
     narrative_paragraphs = generate_annual_narrative_report(
-        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters
+        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters,
+        comparison_current_total=comparison_current_total,
+        comparison_previous_total=comparison_previous_total,
+        comparison_label=yoy_label,
+        use_period_comparison=True,
     )
 
     # 12개월 전체 배열 (작년 vs 올해 콤보 차트용)
@@ -1039,6 +1118,8 @@ def report():
                            last_year_total=last_year_total,
                            yoy_growth_pct=yoy_growth_pct,
                            yoy_diff=yoy_diff,
+                           yoy_label=yoy_label,
+                           yoy_badge_label=yoy_badge_label,
                            best_month=best_month,
                            worst_month=worst_month,
                            avg_monthly=avg_monthly,

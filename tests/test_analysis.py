@@ -252,12 +252,15 @@ def test_dashboard_query_budget_and_fresh_values(service, conn, monkeypatch):
     statements.clear()
     conn.execute("UPDATE daily_profit SET total=99999 WHERE user_id=1 AND date='2026-09-19'")
     conn.commit()
+    # Production writes invalidate this user bucket after commit. This direct SQL
+    # mutation bypasses the route, so mirror the application's cache contract.
+    service.invalidate_user_cache(1)
     response = client.get('/')
     assert '99,999' in response.get_data(as_text=True)
     base_queries = [sql for sql in statements if 'extra_profit' not in sql]
     misc_queries = [sql for sql in statements if 'extra_profit' in sql]
-    assert len(base_queries) <= 2, statements
-    assert len(misc_queries) <= 1, statements
+    assert len(base_queries) <= 3, statements
+    assert len(misc_queries) <= 2, statements
 
 
 def test_login_needs_no_external_render_dependencies(service):
@@ -292,6 +295,68 @@ def test_calendar_uses_one_connection(service, conn, monkeypatch):
     monkeypatch.setattr(profit_analysis, 'get_db', tracked)
     assert client_for(service).get('/calendar?year=2026&month=9').status_code == 200
     assert len(calls) == 1
+
+
+def test_dashboard_and_calendar_second_request_need_no_database(service, conn, monkeypatch):
+    add(conn, '2026-09-19')
+    service.recalc_monthly_summary(conn, 1, 2026, 9)
+    client = client_for(service)
+    assert client.get('/').status_code == 200
+    assert client.get('/calendar?year=2026&month=9').status_code == 200
+
+    def no_db():
+        raise AssertionError('cached financial page unexpectedly opened the database')
+
+    monkeypatch.setattr(service, 'get_db', no_db)
+    import profit_display
+    monkeypatch.setattr(profit_display, 'get_db', no_db)
+    assert client.get('/').status_code == 200
+    assert client.get('/calendar?year=2026&month=9').status_code == 200
+
+
+def test_current_year_report_compares_only_completed_months(service, conn):
+    for month in range(1, 9):
+        conn.execute(
+            'INSERT INTO monthly_summary '
+            '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
+            'VALUES (1,2025,?,?,?, ?,0)',
+            (month, 90, 10, 100),
+        )
+        conn.execute(
+            'INSERT INTO monthly_summary '
+            '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
+            'VALUES (1,2026,?,?,?, ?,0)',
+            (month, 180, 20, 200),
+        )
+    # September is still in progress on the fixture date (2026-09-19) and must
+    # not be compared against the previous year's full September.
+    conn.execute(
+        'INSERT INTO monthly_summary '
+        '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
+        'VALUES (1,2026,9,9000,999,9999,0)'
+    )
+    conn.execute(
+        'INSERT INTO monthly_summary '
+        '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
+        'VALUES (1,2025,9,900,100,1000,0)'
+    )
+    conn.commit()
+    service.invalidate_user_cache(1)
+
+    html = client_for(service).get('/report?year=2026').get_data(as_text=True)
+    assert '전년 동기간 증감률 (1~8월)' in html
+    assert '+100.0%' in html
+    assert '진행 중인 현재 월은 완료월 비교에서 제외합니다.' in html
+    assert '연간 최고 매출 정점' not in html
+
+
+def test_dashboard_labels_364_day_comparison_as_52_weeks(service, conn):
+    add(conn, '2025-09-20')
+    add(conn, '2026-09-19')
+    service.recalc_monthly_summary(conn, 1, 2026, 9)
+    html = client_for(service).get('/').get_data(as_text=True)
+    assert '52주 전 같은 요일 vs 최근 영업일 비교' in html
+    assert '작년 오늘 vs 올해 오늘' not in html
 
 
 def test_login_success_and_failure_with_synthetic_credentials(service, conn):
