@@ -35,8 +35,15 @@ def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=No
     low/high are observed weekday minima/maxima, NOT confidence intervals.
     Keep dow_avg in the call signature for older callers, but never use lifetime averages.
     """
-    owned = conn is None
-    conn = conn or get_db()
+    needs_db = (
+        history_rows is None or schedule is None or entered_rows is None
+        or month_summary_row is None or last_year_total is None
+    )
+    owned = conn is None and needs_db
+    if owned:
+        conn = get_db()
+        if hasattr(conn, 'use_autocommit_reads'):
+            conn.use_autocommit_reads()
     try:
         today = as_of or korea_today()
         start = dt.date(year, month, 1)
