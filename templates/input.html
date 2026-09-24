@@ -4,127 +4,7 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2 class="mb-0"><i class="fas fa-plus-circle text-primary me-2"></i>순익 입력</h2>
-    <span class="badge bg-success px-3 py-2 fs-6"><i class="fas fa-magic me-1"></i> 스크린샷 자동 인식 지원</span>
-</div>
-
-<!-- 📸 스크린샷 3장 자동 인식 카드 -->
-<div class="card border-0 shadow-sm mb-4" style="background: linear-gradient(to right, #f8fafc, #f1f5f9);">
-    <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center py-3">
-        <div>
-            <span class="fw-bold fs-5 text-primary"><i class="fas fa-camera me-2"></i>스크린샷 3장으로 1초 자동 입력</span>
-            <small class="text-muted d-block mt-1">프로그램 마감화면 캡처(Win+Shift+S) 후 각 박스에 붙여넣기(Ctrl+V) 또는 파일 선택</small>
-        </div>
-        <span class="badge bg-primary text-white px-3 py-2">
-            <i class="fas fa-magic me-1"></i> 스크린샷 인식 시 자동 계산
-        </span>
-    </div>
-    <div class="card-body p-4">
-        <div class="row g-3 mb-3">
-            <!-- 스샷 1: 전체 매출 현황 -->
-            <div class="col-md-4">
-                <div class="card h-100 border ocr-slot" id="slot1Card" tabindex="0">
-                    <div class="card-header bg-light py-2 text-center small fw-bold">
-                        <span class="badge bg-primary me-1">1</span> 전체 매출 스샷
-                        <div class="text-danger small mt-1"><i class="fas fa-arrow-down me-1"></i><strong>[조제료(이익금)]</strong> 밑의 숫자</div>
-                    </div>
-                    <div class="card-body p-3 text-center">
-                        <div class="drop-zone py-3 border border-2 border-dashed rounded-3 mb-2" id="drop1" onclick="document.getElementById('file1').click()">
-                            <i class="fas fa-file-image fa-2x text-primary mb-2 opacity-75"></i>
-                            <div class="small text-muted fw-bold">1번 스크린샷 넣기</div>
-                            <div class="small text-muted" style="font-size: 0.75rem;">클릭 또는 Ctrl+V 붙여넣기</div>
-                            <input type="file" id="file1" accept="image/*" class="d-none" onchange="handleFile(this, 1)">
-                        </div>
-                        <div id="preview1" class="text-center mb-2 d-none">
-                            <img id="img1" src="" class="img-fluid rounded border mb-1" style="max-height: 90px;">
-                        </div>
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text bg-light fw-bold small" style="font-size: 0.75rem;">조제+일매</span>
-                            <input type="number" class="form-control text-end fw-bold text-primary fs-6" id="val1" value="0" placeholder="직접 입력 가능" oninput="recalcFromShots()">
-                            <span class="input-group-text">원</span>
-                        </div>
-                        <div class="progress mt-2 d-none" id="prog1" style="height: 4px;">
-                            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%;"></div>
-                        </div>
-                        <small class="text-muted d-block mt-1" id="status1" style="font-size: 0.75rem;">스샷을 넣거나 숫자를 치세요</small>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 스샷 2: 조제 매출 현황 -->
-            <div class="col-md-4">
-                <div class="card h-100 border ocr-slot" id="slot2Card" tabindex="0">
-                    <div class="card-header bg-light py-2 text-center small fw-bold">
-                        <span class="badge bg-success me-1">2</span> 조제 매출 스샷
-                        <div class="text-success small mt-1"><i class="fas fa-arrow-down me-1"></i><strong>[조제료]</strong> 밑의 숫자</div>
-                    </div>
-                    <div class="card-body p-3 text-center">
-                        <div class="drop-zone py-3 border border-2 border-dashed rounded-3 mb-2" id="drop2" onclick="document.getElementById('file2').click()">
-                            <i class="fas fa-prescription-bottle-alt fa-2x text-success mb-2 opacity-75"></i>
-                            <div class="small text-muted fw-bold">2번 스크린샷 넣기</div>
-                            <div class="small text-muted" style="font-size: 0.75rem;">클릭 또는 Ctrl+V 붙여넣기</div>
-                            <input type="file" id="file2" accept="image/*" class="d-none" onchange="handleFile(this, 2)">
-                        </div>
-                        <div id="preview2" class="text-center mb-2 d-none">
-                            <img id="img2" src="" class="img-fluid rounded border mb-1" style="max-height: 90px;">
-                        </div>
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text bg-light fw-bold small" style="font-size: 0.75rem;">순수 조제료</span>
-                            <input type="number" class="form-control text-end fw-bold text-success fs-6" id="val2" value="0" placeholder="직접 입력 가능" oninput="recalcFromShots()">
-                            <span class="input-group-text">원</span>
-                        </div>
-                        <div class="progress mt-2 d-none" id="prog2" style="height: 4px;">
-                            <div class="progress-bar bg-success progress-bar-striped progress-bar-animated" style="width: 100%;"></div>
-                        </div>
-                        <small class="text-muted d-block mt-1" id="status2" style="font-size: 0.75rem;">스샷을 넣거나 숫자를 치세요</small>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 스샷 3: 조제내역 현황 -->
-            <div class="col-md-4">
-                <div class="card h-100 border ocr-slot" id="slot3Card" tabindex="0">
-                    <div class="card-header bg-light py-2 text-center small fw-bold">
-                        <span class="badge bg-warning text-dark me-1">3</span> 조제약품별 스샷
-                        <div class="text-dark small mt-1"><i class="fas fa-arrow-down me-1"></i><strong>[이익금]</strong> 밑의 숫자</div>
-                    </div>
-                    <div class="card-body p-3 text-center">
-                        <div class="drop-zone py-3 border border-2 border-dashed rounded-3 mb-2" id="drop3" onclick="document.getElementById('file3').click()">
-                            <i class="fas fa-pills fa-2x text-warning mb-2 opacity-75"></i>
-                            <div class="small text-muted fw-bold">3번 스크린샷 넣기</div>
-                            <div class="small text-muted" style="font-size: 0.75rem;">클릭 또는 Ctrl+V 붙여넣기</div>
-                            <input type="file" id="file3" accept="image/*" class="d-none" onchange="handleFile(this, 3)">
-                        </div>
-                        <div id="preview3" class="text-center mb-2 d-none">
-                            <img id="img3" src="" class="img-fluid rounded border mb-1" style="max-height: 90px;">
-                        </div>
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text bg-light fw-bold small" style="font-size: 0.75rem;">비보험 차액</span>
-                            <input type="number" class="form-control text-end fw-bold text-dark fs-6" id="val3" value="0" placeholder="직접 입력 가능" oninput="recalcFromShots()">
-                            <span class="input-group-text">원</span>
-                        </div>
-                        <div class="progress mt-2 d-none" id="prog3" style="height: 4px;">
-                            <div class="progress-bar bg-warning progress-bar-striped progress-bar-animated" style="width: 100%;"></div>
-                        </div>
-                        <small class="text-muted d-block mt-1" id="status3" style="font-size: 0.75rem;">스샷을 넣거나 숫자를 치세요</small>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 실시간 자동 계산 결과 브리핑 배너 -->
-        <div class="alert alert-primary mb-0 d-flex flex-wrap justify-content-between align-items-center py-2 px-3">
-            <div class="small">
-                <strong><i class="fas fa-calculator me-1"></i> 자동 계산 결과:</strong> 
-                조제료 <strong id="calcDispensingText">0</strong>원 + 
-                일매순익 (<span id="calcSubFormula">0 - 0</span> = <strong id="calcDailyText" class="text-success">0</strong>원) + 
-                비보험 <strong id="calcNonInsText">0</strong>원 = 
-                <span class="fs-6 fw-bold text-primary">당일 총순익 <span id="calcTotalText">0</span>원</span>
-            </div>
-            <button type="button" class="btn btn-primary btn-sm px-3" onclick="applyToForm()">
-                <i class="fas fa-check me-1"></i> 아래 폼에 적용하기
-            </button>
-        </div>
-    </div>
+    <span class="badge bg-primary px-3 py-2 fs-6"><i class="fas fa-bolt me-1"></i> 데이팜 실시간 자동 연동</span>
 </div>
 
 <div class="row">
@@ -133,7 +13,7 @@
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
                 <span><i class="fas fa-edit text-primary me-2"></i>일별 순익 저장 폼</span>
-                <span class="badge bg-light text-muted">수동 타이핑 가능</span>
+                <span class="badge bg-light text-muted">수동 타이핑 / 데이팜 연동</span>
             </div>
             <div class="card-body p-4">
                 <form method="POST" action="/input">
@@ -149,7 +29,7 @@
                     </div>
 
                     <div class="mb-3">
-                        <label for="daily_net_profit" class="form-label fw-bold text-success">2. 일매순익 (원) <small class="text-muted fw-normal">(조제+일매 - 조제료)</small></label>
+                        <label for="daily_net_profit" class="form-label fw-bold text-success">2. 일매순익 (원) <small class="text-muted fw-normal">(일반판매 순이익)</small></label>
                         <input type="number" class="form-control form-control-lg text-end" id="daily_net_profit" name="daily_net_profit"
                                value="{{ edit_sale.daily_net_profit if edit_sale else 0 }}" min="0" required>
                     </div>
@@ -163,7 +43,7 @@
                     <div class="mb-3">
                         <label for="memo" class="form-label">메모 (선택사항)</label>
                         <input type="text" class="form-control" id="memo" name="memo"
-                               value="{{ edit_sale.memo if edit_sale else '' }}" placeholder="예: 스크린샷 자동입력 완료">
+                               value="{{ edit_sale.memo if edit_sale else '' }}" placeholder="예: 데이팜 자동 연동">
                     </div>
 
                     <div class="alert alert-light border py-2 mb-3 text-center">
@@ -236,114 +116,7 @@
     </div>
 </div>
 
-<style>
-.ocr-slot { transition: all 0.2s ease; outline: none; }
-.ocr-slot:focus-within, .ocr-slot:hover { border-color: #2563eb !important; box-shadow: 0 4px 12px rgba(37,99,235,0.1); }
-.drop-zone { cursor: pointer; transition: background-color 0.2s; background-color: #ffffff; }
-.drop-zone:hover { background-color: #f0f7ff !important; }
-</style>
-
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-<script src="{{ url_for('static', filename='js/ocr_extract.js') }}"></script>
 <script>
-let lastFocusedSlot = 1;
-
-document.getElementById('slot1Card').addEventListener('click', () => { lastFocusedSlot = 1; });
-document.getElementById('slot2Card').addEventListener('click', () => { lastFocusedSlot = 2; });
-document.getElementById('slot3Card').addEventListener('click', () => { lastFocusedSlot = 3; });
-
-// 전역 Ctrl+V 클립보드 붙여넣기 감지
-window.addEventListener('paste', function(e) {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-            const file = items[i].getAsFile();
-            processImage(file, lastFocusedSlot);
-            e.preventDefault();
-            break;
-        }
-    }
-});
-
-function handleFile(input, slotIndex) {
-    if (input.files && input.files[0]) {
-        processImage(input.files[0], slotIndex);
-        input.value = '';
-    }
-}
-
-async function processImage(file, slotIndex) {
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-        const previewImg = document.getElementById(`img${slotIndex}`);
-        previewImg.src = e.target.result;
-        document.getElementById(`preview${slotIndex}`).classList.remove('d-none');
-        document.getElementById(`prog${slotIndex}`).classList.remove('d-none');
-        document.getElementById(`status${slotIndex}`).innerHTML = '<span class="text-primary"><i class="fas fa-spinner fa-spin me-1"></i>스캔 분석 중...</span>';
-
-        try {
-            // 원본 파일로 Tesseract OCR 직접 실행
-            const text = await runOCR(file, `prog${slotIndex}`, `status${slotIndex}`);
-            
-            let parsed = null;
-            if (slotIndex === 1) parsed = parseShot1(text);
-            else if (slotIndex === 2) parsed = parseShot2(text);
-            else if (slotIndex === 3) parsed = parseShot3(text);
-
-            if (parsed && parsed.value > 0) {
-                document.getElementById(`val${slotIndex}`).value = parsed.value;
-                document.getElementById(`status${slotIndex}`).innerHTML = `<span class="text-success fw-bold"><i class="fas fa-check-circle me-1"></i>${parsed.value.toLocaleString()}원 감지됨</span>`;
-                if (parsed.date) {
-                    document.getElementById('date').value = parsed.date;
-                }
-            } else {
-                document.getElementById(`status${slotIndex}`).innerHTML = '<span class="text-warning fw-bold"><i class="fas fa-keyboard me-1"></i>위 칸에 숫자를 입력해 주세요</span>';
-                document.getElementById(`val${slotIndex}`).focus();
-            }
-        } catch(err) {
-            console.error(err);
-            document.getElementById(`status${slotIndex}`).innerHTML = '<span class="text-muted">직접 입력 가능</span>';
-        }
-        recalcFromShots();
-    };
-    reader.readAsDataURL(file);
-}
-
-function recalcFromShots() {
-    const v1 = parseInt(document.getElementById('val1').value) || 0; // 조제+일매
-    const v2 = parseInt(document.getElementById('val2').value) || 0; // 조제료
-    const v3 = parseInt(document.getElementById('val3').value) || 0; // 비보험
-
-    // 사용자 계산 규칙: 일매순익 = v1 - v2
-    const dailyNet = Math.max(0, v1 - v2);
-    const total = v1 + v3; // (v2 + dailyNet) + v3
-
-    document.getElementById('calcDispensingText').textContent = v2.toLocaleString();
-    document.getElementById('calcSubFormula').textContent = `${v1.toLocaleString()} - ${v2.toLocaleString()}`;
-    document.getElementById('calcDailyText').textContent = dailyNet.toLocaleString();
-    document.getElementById('calcNonInsText').textContent = v3.toLocaleString();
-    document.getElementById('calcTotalText').textContent = total.toLocaleString();
-}
-
-function applyToForm() {
-    const v1 = parseInt(document.getElementById('val1').value) || 0;
-    const v2 = parseInt(document.getElementById('val2').value) || 0;
-    const v3 = parseInt(document.getElementById('val3').value) || 0;
-    const dailyNet = Math.max(0, v1 - v2);
-
-    document.getElementById('dispensing_fee').value = v2;
-    document.getElementById('daily_net_profit').value = dailyNet;
-    document.getElementById('non_insurance_margin').value = v3;
-    document.getElementById('memo').value = '스크린샷 자동 계산 입력';
-
-    updatePreview();
-    
-    // 부드러운 스크롤
-    document.getElementById('dispensing_fee').focus();
-}
-
-
 function updatePreview() {
     const d = parseInt(document.getElementById('dispensing_fee').value) || 0;
     const n = parseInt(document.getElementById('daily_net_profit').value) || 0;
@@ -374,6 +147,5 @@ if (urlParams.has('dispensing_fee') || urlParams.has('daily_net_profit') || urlP
 }
 
 updatePreview();
-recalcFromShots();
 </script>
 {% endblock %}
