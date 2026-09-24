@@ -962,7 +962,8 @@ def report():
     all_rows = sorted(raw_rows, key=lambda r: (-int(r['year']), int(r['month'])))
 
     years = sorted(list(set(int(r['year']) for r in all_rows)), reverse=True)
-    selected_year = request.args.get('year', years[0] if years else datetime.date.today().year, type=int)
+    today = korea_today()
+    selected_year = request.args.get('year', years[0] if years else today.year, type=int)
     last_year = selected_year - 1
 
     report_data = []
@@ -1019,12 +1020,38 @@ def report():
             'grand': last_year_grand
         }
 
-    # 전년 대비 성장률
+    # 전년 비교는 같은 기간끼리만 계산한다. 진행 중인 현재 월은 완료월 비교에서 제외한다.
+    previous_by_month = {
+        int(r['month']): int(r['grand_total'] or 0)
+        for r in all_rows if int(r['year']) == last_year
+    }
+    comparable_rows = [
+        r for r in report_data
+        if not (selected_year == today.year and int(r['month']) >= today.month)
+    ]
+    comparison_months = [int(r['month']) for r in comparable_rows]
+    comparison_complete = bool(comparison_months) and all(m in previous_by_month for m in comparison_months)
+    comparison_current_total = sum(int(r['grand_total']) for r in comparable_rows) if comparison_complete else None
+    comparison_previous_total = (
+        sum(previous_by_month[m] for m in comparison_months) if comparison_complete else None
+    )
     yoy_growth_pct = None
-    yoy_diff = 0
-    if last_year_total and last_year_total['grand'] > 0:
-        yoy_diff = year_total['grand'] - last_year_total['grand']
-        yoy_growth_pct = round((yoy_diff / float(last_year_total['grand'])) * 100, 1)
+    yoy_diff = None
+    yoy_label = None
+    yoy_badge_label = None
+    if comparison_previous_total is not None and comparison_previous_total > 0:
+        yoy_diff = comparison_current_total - comparison_previous_total
+        yoy_growth_pct = round((yoy_diff / float(comparison_previous_total)) * 100, 1)
+        contiguous = comparison_months == list(range(1, max(comparison_months) + 1))
+        if selected_year == today.year:
+            yoy_label = (
+                f"전년 동기간 증감률 (1~{max(comparison_months)}월)"
+                if contiguous else "전년 동일 완료월 증감률"
+            )
+            yoy_badge_label = "전년동기간"
+        else:
+            yoy_label = "전년 동일 입력월 증감률"
+            yoy_badge_label = "전년동월"
 
     # 최고/최저 실적 달
     best_month = max(report_data, key=lambda r: r['grand_total']) if report_data else None
@@ -1053,7 +1080,10 @@ def report():
 
     # 연간 줄글 분석 생성
     narrative_paragraphs = generate_annual_narrative_report(
-        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters
+        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters,
+        comparison_current_total=comparison_current_total,
+        comparison_previous_total=comparison_previous_total,
+        comparison_label=yoy_label,
     )
 
     # 12개월 전체 배열 (작년 vs 올해 콤보 차트용)
@@ -1081,6 +1111,8 @@ def report():
                            last_year_total=last_year_total,
                            yoy_growth_pct=yoy_growth_pct,
                            yoy_diff=yoy_diff,
+                           yoy_label=yoy_label,
+                           yoy_badge_label=yoy_badge_label,
                            best_month=best_month,
                            worst_month=worst_month,
                            avg_monthly=avg_monthly,
