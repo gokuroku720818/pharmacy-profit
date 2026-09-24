@@ -308,7 +308,8 @@ def warm_up_cache(user_id=1):
                     today = korea_today()
                     get_cached_monthly_summary(conn, user_id)
                     get_cached_current_month_dailies(conn, user_id, today.year, today.month)
-                    get_cached_analysis_rows(conn, user_id, today.year, today.month)
+                    analysis_rows = get_cached_analysis_rows(conn, user_id, today.year, today.month)
+                    get_cached_weekly_stats(conn, user_id, rows=analysis_rows)
                     get_cached_dow_avg(conn, user_id)
                     get_cached_business_schedule(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
@@ -576,6 +577,30 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
     }
 
 
+def get_cached_weekly_stats(conn=None, user_id=None, num_weeks=4, rows=None):
+    """최근 주간 통계 캐시. 영업일 설정 변경과 무관한 실제 장부/잡이익 데이터만 사용한다."""
+    now = time.time()
+    cache_key = f"weekly_stats:{num_weeks}:{korea_today().isoformat()}"
+    with _CACHE_LOCK:
+        entry = (_USER_CACHE.get(user_id) or {}).get(cache_key)
+        if entry and (now - entry['ts'] < _CACHE_TTL):
+            return entry['data']
+
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        data = get_recent_weeks_profit_stats(conn, user_id, num_weeks=num_weeks, rows=rows)
+        with _CACHE_LOCK:
+            bucket = _USER_CACHE.setdefault(user_id, {})
+            bucket[cache_key] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
+
+
 # ==========================================
 # ⚡ 킵얼라이브(Keep-Alive) 찌르기 전용 초경량 엔드포인트
 # ==========================================
@@ -779,7 +804,7 @@ def dashboard():
                                                month_summary_row=rows[-1] if rows else {})
         narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast,
                                                        latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows, comparison_rows=comparison_rows)
-        weekly_stats = get_recent_weeks_profit_stats(conn, user_id, rows=analysis_rows)
+        weekly_stats = get_cached_weekly_stats(conn, user_id, rows=analysis_rows)
 
         dashboard_ctx = {
             'current_month': current_month,
@@ -920,11 +945,13 @@ def save_business_schedule():
     finally:
         conn.close()
     user_id = session['user_id']
-    invalidate_user_cache_keys(
-        user_id,
-        keys=('business_schedule',),
-        prefixes=('dashboard_ctx:', 'calendar_ctx:')
-    )
+    invalidate_user_cache_keys(user_id, prefixes=('dashboard_ctx:', 'calendar_ctx:'))
+    with _CACHE_LOCK:
+        bucket = _USER_CACHE.setdefault(user_id, {})
+        bucket['business_schedule'] = {
+            'ts': time.time(),
+            'data': {'weekdays': weekdays, 'closed_dates': closed, 'open_dates': opened}
+        }
     flash('영업 일정이 저장되었습니다. 예측과 미입력일을 다시 계산했습니다.', 'success')
     return redirect(url_for('calendar_view', year=year, month=month))
 
