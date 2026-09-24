@@ -13,6 +13,16 @@ def test_secret_requires_explicit_long_value():
     assert require_secret_key({'SECRET_KEY': 'a' * 32}) == 'a' * 32
 
 
+def test_hosted_session_key_is_stable_from_database_credential():
+    from auth_config import require_secret_key
+    first = require_secret_key({'DATABASE_URL': 'postgresql://user:private-a@db.example/db'})
+    assert len(first) == 64
+    assert first == require_secret_key({'DATABASE_URL': 'postgresql://user:private-a@db.example/db'})
+    assert first != require_secret_key({'DATABASE_URL': 'postgresql://user:private-b@db.example/db'})
+    assert 'private-a' not in first
+    assert require_secret_key({'DATABASE_URL': 'postgresql://x', 'SECRET_KEY': 'x' * 32}) == 'x' * 32
+
+
 def test_new_admin_requires_bootstrap_password_but_existing_admin_survives(tmp_path, monkeypatch):
     monkeypatch.setattr(database, 'SQLITE_PATH', str(tmp_path / 'sales.db'))
     monkeypatch.delenv('DATABASE_URL', raising=False)
