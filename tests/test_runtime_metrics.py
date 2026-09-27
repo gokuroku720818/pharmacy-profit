@@ -56,6 +56,21 @@ def test_double_close_does_not_close_pooled_connection_twice():
     assert conn.raw.closed == 1
 
 
+def test_batched_sql_is_measured_and_remains_uncommitted():
+    import sqlite3
+    data = Metrics()
+    raw = sqlite3.connect(':memory:')
+    raw.execute('CREATE TABLE sample (amount INTEGER)')
+    conn = MeasuredConnection(raw, data)
+    conn.executemany('INSERT INTO sample VALUES (?)', [(100,), (200,)])
+    assert raw.execute('SELECT SUM(amount) FROM sample').fetchone()[0] == 300
+    assert data.queries == 1
+    assert data.sql_ms >= 0
+    raw.rollback()
+    assert raw.execute('SELECT COUNT(*) FROM sample').fetchone()[0] == 0
+    conn.close()
+
+
 def test_context_manager_returns_wrapper_and_releases_once():
     data = Metrics()
     conn = MeasuredConnection(FakeConn(), data)

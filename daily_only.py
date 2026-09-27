@@ -19,6 +19,25 @@ DAY_NAMES = '월화수목금토일'
 MAX_WORKBOOK_SIZE = 10 * 1024 * 1024
 
 
+class DailyImportBatch:
+    """Buffer identical upserts, preserving order and one import transaction."""
+    def __init__(self, conn):
+        self.conn = conn
+        self.sql = None
+        self.rows = []
+
+    def execute(self, sql, row):
+        if self.sql != sql or len(self.rows) >= 200:
+            self.flush()
+        self.sql = sql
+        self.rows.append(row)
+
+    def flush(self):
+        if self.rows:
+            self.conn.executemany(self.sql, self.rows)
+            self.rows.clear()
+
+
 def _amount(value):
     """Do not turn malformed financial cells into fabricated zeroes."""
     if value is None or value == '':
@@ -179,16 +198,18 @@ def install(module):
                 raise ValueError('파일은 10MB 이하의 엑셀만 업로드할 수 있습니다.')
             workbook = _open_workbook(data, request.form.get('excel_password', '').strip())
             conn = module.get_db()
+            batch = DailyImportBatch(conn)
             imported = 0
             for day, disp, daily, nim, total, combined, memo in _parse_daily_rows(
                     workbook, upload.filename, request.form.get('start_year')):
-                _daily_upsert(conn, session['user_id'], day, disp, daily, nim,
+                _daily_upsert(batch, session['user_id'], day, disp, daily, nim,
                               total, dpd=combined, memo=memo)
                 imported += 1
             if not imported:
                 conn.rollback()
                 flash('일장부에 가져올 날짜별 기록이 없습니다.', 'warning')
                 return redirect(url_for('dashboard'))
+            batch.flush()
             conn.commit()
         except Exception as exc:
             if conn is not None:

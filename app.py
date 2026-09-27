@@ -903,31 +903,34 @@ def input_sales():
 
     # GET: ⚡ 초고속 스마트 캐시 활용 (DB 연결 0회, 0ms 즉시 응답!)
     now = time.time()
+    today = korea_today().isoformat()
     recent = None
     yoy_day = None
     with _CACHE_LOCK:
         if user_id in _USER_CACHE:
             entry = _USER_CACHE[user_id].get('input_cache')
-            if entry and (now - entry['ts'] < _CACHE_TTL):
+            if entry and entry.get('date') == today and (now - entry['ts'] < _CACHE_TTL):
                 recent = entry['recent']
                 yoy_day = entry['yoy_day']
 
     if recent is None:
         conn = get_db()
         try:
+            if hasattr(conn, 'use_autocommit_reads'):
+                conn.use_autocommit_reads()
             recent_raw = conn.execute('''
                 SELECT * FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 20
             ''', (user_id,)).fetchall()
             recent = [dict(r) for r in recent_raw]
-            yoy_day = get_yoy_day_comparison(conn, user_id)
+            latest = next((row for row in recent if row['date'] <= today), None)
+            yoy_day = get_yoy_day_comparison(conn, user_id, today_row=latest)
             with _CACHE_LOCK:
                 if user_id not in _USER_CACHE:
                     _USER_CACHE[user_id] = {}
-                _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent, 'yoy_day': yoy_day}
+                _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'date': today, 'recent': recent, 'yoy_day': yoy_day}
         finally:
             conn.close()
 
-    today = korea_today().isoformat()
     return render_template('input.html', today=today, recent_sales=recent, yoy_day=yoy_day)
 
 

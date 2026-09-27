@@ -65,6 +65,23 @@ def _monthly_extras():
     return _cached_source('display_extras', monthly_totals)
 
 
+def _monthly_components():
+    """Reuse daily-ledger columns without a second connection or full scan."""
+    module = _cache_module()
+    if module is not None and getattr(module, '_daily_monthly_ledger_installed', False):
+        rows = module.get_cached_monthly_summary(None, session['user_id'])
+        return {
+            (int(row['year']), int(row['month'])): {
+                'dispensing_fee': int(row['dispensing_fee']),
+                'daily_net_profit': int(row['daily_net_profit']),
+                'non_insurance_margin': int(row['non_insurance_total']),
+                'grand_total': int(row['daily_total']),
+            }
+            for row in rows if row['source_day_count']
+        }
+    return _cached_source('display_components', load_monthly_components)
+
+
 def install(app):
     """Expose narrow template helpers without changing stored monetary formulas."""
     if app.extensions.get('three_profit_display_installed'):
@@ -77,7 +94,7 @@ def install(app):
 
         def grouped():
             if not hasattr(g, '_three_profit_grouped'):
-                g._three_profit_grouped = _cached_source('display_components', load_monthly_components)
+                g._three_profit_grouped = _monthly_components()
             return g._three_profit_grouped
 
         def extras():
