@@ -21,15 +21,16 @@ def install(app):
             'Content-Encoding' in response.headers):
             return response
 
-        # 클라이언트가 gzip을 지원하지 않으면 건너뜀
-        accept_encoding = request.headers.get('Accept-Encoding', '')
-        if 'gzip' not in accept_encoding:
-            return response
-
         # 압축할 가치가 있는 텍스트/JSON/자바스크립트 MIME 타입만 대상
         mimetype = response.mimetype or ''
         if not (mimetype.startswith('text/') or
                 mimetype in ('application/json', 'application/javascript', 'application/xml', 'image/svg+xml')):
+            return response
+
+        # Negotiation applies to identity responses too. In particular,
+        # "gzip;q=0" explicitly forbids gzip despite containing its name.
+        response.vary.add('Accept-Encoding')
+        if request.accept_encodings['gzip'] <= 0:
             return response
 
         # 너무 작은 응답(500바이트 미만)은 압축 오버헤드가 더 크므로 제외

@@ -8,7 +8,7 @@ from werkzeug.security import generate_password_hash
 
 try:
     import psycopg2
-    from psycopg2.extras import RealDictCursor
+    from psycopg2.extras import RealDictCursor, execute_batch
     from psycopg2.pool import ThreadedConnectionPool
 except ImportError:
     psycopg2 = None
@@ -63,6 +63,7 @@ class PostgresConnectionWrapper:
         self.from_pool = from_pool
         self._closed = False
         self._autocommit_reads = False
+        self._transaction_started = False
 
     def use_autocommit_reads(self):
         """Skip an empty read transaction's rollback round trip.
@@ -117,16 +118,23 @@ class PostgresConnectionWrapper:
                 self.conn.autocommit = True
 
     def cursor(self):
-        return PostgresCursorWrapper(self.conn.cursor())
+        return PostgresCursorWrapper(self.conn.cursor(), self._mark_transaction)
+
+    def _mark_transaction(self):
+        if not self._autocommit_reads:
+            self._transaction_started = True
 
     def execute(self, sql, params=None):
+        # Retry only an isolated read. A new connection cannot recover earlier
+        # uncommitted statements; replaying a write could also duplicate it.
+        retry_read = (not self._transaction_started and
+                      bool(re.match(r'^\s*SELECT\b', sql, re.IGNORECASE)))
         try:
             cur = self.cursor()
             cur.execute(sql, params)
             return cur
         except Exception as exc:
-            if _is_connection_dead(exc):
-                # 일시적 연결 단절 시 1회 자동 재연결 및 재시도로 500 에러 원천 방지
+            if retry_read and _is_connection_dead(exc):
                 try:
                     self._reconnect()
                     cur = self.cursor()
@@ -136,12 +144,23 @@ class PostgresConnectionWrapper:
                     raise exc
             raise
 
+    def executemany(self, sql, params):
+        """Bound remote import round trips; leave commit/rollback to the caller."""
+        self._mark_transaction()
+        cur = self.conn.cursor()
+        try:
+            execute_batch(cur, adapt_sql_for_postgres(sql), params, page_size=200)
+        finally:
+            cur.close()
+
     def commit(self):
         self.conn.commit()
+        self._transaction_started = False
 
     def rollback(self):
         try:
             self.conn.rollback()
+            self._transaction_started = False
         except Exception:
             pass
 
@@ -293,12 +312,15 @@ def adapt_sql_for_postgres(sql):
 
 
 class PostgresCursorWrapper:
-    def __init__(self, cursor):
+    def __init__(self, cursor, on_execute=None):
         self.cursor = cursor
         self.lastrowid = None
+        self._on_execute = on_execute
 
     def execute(self, sql, params=None):
         adapted_sql = adapt_sql_for_postgres(sql)
+        if self._on_execute is not None:
+            self._on_execute()
         self.cursor.execute(adapted_sql, params or ())
         if 'RETURNING id' in adapted_sql:
             row = self.cursor.fetchone()
