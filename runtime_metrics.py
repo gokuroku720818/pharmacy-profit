@@ -94,15 +94,6 @@ class MeasuredConnection:
             self.data.queries += 1
             self.data.sql_ms += _milliseconds(start)
 
-    def executemany(self, sql, params):
-        start = time.perf_counter()
-        try:
-            return self.raw.executemany(sql, params)
-        finally:
-            # Count a batch operation once, including failed batches.
-            self.data.queries += 1
-            self.data.sql_ms += _milliseconds(start)
-
     def close(self):
         if self._closed:
             return
@@ -191,9 +182,6 @@ def install(app_module):
 
     @flask_app.after_request
     def _perf_finish(response):
-        # Earlier before_request hooks may return/abort before metrics starts.
-        if not hasattr(g, '_perf_data') or not hasattr(g, '_perf_start'):
-            return response
         data = g._perf_data
         elapsed = _milliseconds(g._perf_start)
         if os.getenv('PERF_SERVER_TIMING') == '1':

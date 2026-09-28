@@ -25,8 +25,7 @@ app.jinja_env.trim_blocks = True
 app.jinja_env.lstrip_blocks = True
 from profit_display import install as install_profit_display
 install_profit_display(app)
-from auth_config import require_secret_key
-app.secret_key = require_secret_key()
+app.secret_key = os.environ.get('SECRET_KEY', 'pharmacy-profit-saas-super-secret-key-2026')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 86400  # 정적 에셋 24시간 브라우저 캐싱
 
 # 🔒 약국장 전용 1인 단독 모드: 신규 가입 차단 (환경변수 ALLOW_REGISTRATION=1 로 필요 시 즉시 재개 가능)
@@ -36,17 +35,6 @@ ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', '0') == '1'
 _USER_CACHE = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_TTL = 3600  # 1시간 유효 (데이터 변경 시 invalidate_user_cache 즉시 호출로 실시간 정합성 보장)
-_CACHE_MISS = object()
-
-
-def get_valid_user_cache_value(user_id, key):
-    """Return a live cached value without opening a DB connection."""
-    now = time.time()
-    with _CACHE_LOCK:
-        entry = (_USER_CACHE.get(user_id) or {}).get(key)
-        if entry and (now - entry['ts'] < _CACHE_TTL):
-            return entry['data']
-    return _CACHE_MISS
 
 
 def get_cached_monthly_summary(conn=None, user_id=None):
@@ -98,14 +86,13 @@ def get_cached_current_month_dailies(conn=None, user_id=None, cur_year=None, cur
         conn = get_db()
         should_close = True
     try:
-        month_start = datetime.date(cur_year, cur_month, 1)
-        next_month = (month_start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+        date_prefix = f"{cur_year}-{cur_month:02d}"
         cur_month_rows = conn.execute('''
             SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
             FROM daily_profit
-            WHERE user_id = ? AND date >= ? AND date < ?
+            WHERE user_id = ? AND date LIKE ?
             ORDER BY date ASC
-        ''', (user_id, month_start.isoformat(), next_month.isoformat())).fetchall()
+        ''', (user_id, date_prefix + '%')).fetchall()
 
         data = [dict(r) for r in cur_month_rows]
         with _CACHE_LOCK:
@@ -144,29 +131,6 @@ def get_cached_dow_avg(conn=None, user_id=None):
             if user_id not in _USER_CACHE:
                 _USER_CACHE[user_id] = {}
             _USER_CACHE[user_id]['dow_avg'] = {'ts': now, 'data': data}
-        return data
-    finally:
-        if should_close:
-            conn.close()
-
-
-def get_cached_business_schedule(conn=None, user_id=None):
-    """영업일 설정 캐시. 저장 시 사용자 캐시 전체가 무효화되어 즉시 갱신된다."""
-    now = time.time()
-    with _CACHE_LOCK:
-        entry = (_USER_CACHE.get(user_id) or {}).get('business_schedule')
-        if entry and (now - entry['ts'] < _CACHE_TTL):
-            return entry['data']
-
-    should_close = False
-    if conn is None:
-        conn = get_db()
-        should_close = True
-    try:
-        data = get_business_schedule(conn, user_id)
-        with _CACHE_LOCK:
-            bucket = _USER_CACHE.setdefault(user_id, {})
-            bucket['business_schedule'] = {'ts': now, 'data': data}
         return data
     finally:
         if should_close:
@@ -228,7 +192,7 @@ def invalidate_admin_cache():
 
 
 def invalidate_user_cache(user_id=None):
-    """알 수 없는/광범위 변경용 전체 사용자 캐시 무효화."""
+    """데이터 변경 시 해당 사용자의 인메모리 캐시 및 관리자 캐시 즉시 무효화 (실시간 정합성 보장)"""
     with _CACHE_LOCK:
         if user_id is None:
             _USER_CACHE.clear()
@@ -237,48 +201,14 @@ def invalidate_user_cache(user_id=None):
         _ADMIN_CACHE.clear()
 
 
-def invalidate_user_cache_keys(user_id, keys=(), prefixes=()):
-    """변경된 데이터에 의존하는 캐시만 제거해 불필요한 원격 DB 재조회 방지."""
-    with _CACHE_LOCK:
-        bucket = _USER_CACHE.get(user_id)
-        if bucket is not None:
-            exact = set(keys)
-            prefixes = tuple(prefixes)
-            for key in list(bucket):
-                if key in exact or (prefixes and key.startswith(prefixes)):
-                    bucket.pop(key, None)
-            if not bucket:
-                _USER_CACHE.pop(user_id, None)
-        _ADMIN_CACHE.clear()
-
-
-def invalidate_daily_profit_cache(user_id):
-    """일별 장부 수정 시 영향을 받는 금융 파생 캐시만 제거."""
-    invalidate_user_cache_keys(
-        user_id,
-        keys=('monthly_summary', 'dow_avg', 'display_components', 'input_cache'),
-        prefixes=('daily_', 'analysis:', 'weekly_stats:', 'dashboard_ctx:', 'calendar_ctx:')
-    )
-
-
-def invalidate_extra_profit_cache(user_id):
-    """잡이익 변경은 일별 원장/계산기/영업일 설정 캐시를 건드리지 않는다."""
-    invalidate_user_cache_keys(
-        user_id,
-        keys=('monthly_summary', 'display_extras'),
-        prefixes=('weekly_stats:', 'dashboard_ctx:', 'calendar_ctx:')
-    )
-
-
-# Schema initialization is an explicit operator step: python manage_db.py init.
+# 서버 구동 시 DB 및 스키마 자동 초기화
+init_db()
 from extra_profit import install as install_extra_profit
 install_extra_profit(app)
 from response_security import install as install_response_security
 install_response_security(app)
 from response_compress import install as install_response_compress
 install_response_compress(app)
-from csrf_protection import install as install_csrf_protection
-install_csrf_protection(app)
 
 
 def bootstrap_app_extensions(app_module=None):
@@ -312,16 +242,14 @@ def warm_up_cache(user_id=1):
 
     def _worker():
         try:
+            time.sleep(0.5)  # 서버 및 커넥션 풀 초기화 대기
             with app.app_context():
                 conn = get_db()
                 try:
-                    today = korea_today()
+                    now = datetime.datetime.now()
                     get_cached_monthly_summary(conn, user_id)
-                    get_cached_current_month_dailies(conn, user_id, today.year, today.month)
-                    analysis_rows = get_cached_analysis_rows(conn, user_id, today.year, today.month)
-                    get_cached_weekly_stats(conn, user_id, rows=analysis_rows)
+                    get_cached_current_month_dailies(conn, user_id, now.year, now.month)
                     get_cached_dow_avg(conn, user_id)
-                    get_cached_business_schedule(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
                 finally:
                     conn.close()
@@ -396,7 +324,7 @@ def get_latest_month_summary(user_id, conn=None):
             'grand_total': int(row['grand_total'] or 0),
             'diff': int(row['prev_month_diff'] or 0)
         }
-    now = korea_today()
+    now = datetime.date.today()
     return {'year': now.year, 'month': now.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0}
 
 
@@ -408,36 +336,10 @@ def load_analysis_rows(conn, user_id, year, month):
     recent_start = today - datetime.timedelta(days=55)
     recent_end = today + datetime.timedelta(days=6 - today.weekday())
     return [dict(r) for r in conn.execute(
-        "SELECT date, day_of_week, dispensing_fee, daily_net_profit, "
-        "dispensing_plus_daily, non_insurance_margin, total "
-        "FROM daily_profit WHERE user_id = ? AND "
+        "SELECT * FROM daily_profit WHERE user_id = ? AND "
         "(date BETWEEN ? AND ? OR date BETWEEN ? AND ?) ORDER BY date",
         (user_id, start.isoformat(), end.isoformat(), recent_start.isoformat(), recent_end.isoformat())
     ).fetchall()]
-
-
-def get_cached_analysis_rows(conn=None, user_id=None, year=None, month=None):
-    """대시보드·달력이 공유하는 일별 분석 스냅샷 캐시."""
-    now = time.time()
-    cache_key = f"analysis:{year:04d}-{month:02d}:{korea_today().isoformat()}"
-    with _CACHE_LOCK:
-        entry = (_USER_CACHE.get(user_id) or {}).get(cache_key)
-        if entry and (now - entry['ts'] < _CACHE_TTL):
-            return entry['data']
-
-    should_close = False
-    if conn is None:
-        conn = get_db()
-        should_close = True
-    try:
-        data = load_analysis_rows(conn, user_id, year, month)
-        with _CACHE_LOCK:
-            bucket = _USER_CACHE.setdefault(user_id, {})
-            bucket[cache_key] = {'ts': now, 'data': data}
-        return data
-    finally:
-        if should_close:
-            conn.close()
 
 
 def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
@@ -587,36 +489,12 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
     }
 
 
-def get_cached_weekly_stats(conn=None, user_id=None, num_weeks=4, rows=None):
-    """최근 주간 통계 캐시. 영업일 설정 변경과 무관한 실제 장부/잡이익 데이터만 사용한다."""
-    now = time.time()
-    cache_key = f"weekly_stats:{num_weeks}:{korea_today().isoformat()}"
-    with _CACHE_LOCK:
-        entry = (_USER_CACHE.get(user_id) or {}).get(cache_key)
-        if entry and (now - entry['ts'] < _CACHE_TTL):
-            return entry['data']
-
-    should_close = False
-    if conn is None:
-        conn = get_db()
-        should_close = True
-    try:
-        data = get_recent_weeks_profit_stats(conn, user_id, num_weeks=num_weeks, rows=rows)
-        with _CACHE_LOCK:
-            bucket = _USER_CACHE.setdefault(user_id, {})
-            bucket[cache_key] = {'ts': now, 'data': data}
-        return data
-    finally:
-        if should_close:
-            conn.close()
-
-
 # ==========================================
 # ⚡ 킵얼라이브(Keep-Alive) 찌르기 전용 초경량 엔드포인트
 # ==========================================
 
-@app.route('/ping')
-@app.route('/health')
+@app.route('/ping', methods=['GET', 'HEAD', 'POST'])
+@app.route('/health', methods=['GET', 'HEAD', 'POST'])
 def ping():
     """cron-job.org / UptimeRobot 찌르기 전용 초경량 엔드포인트 (출력 크기 2바이트: output too large 에러 영구 방지)"""
     return 'ok', 200, {'Content-Type': 'text/plain'}
@@ -637,8 +515,6 @@ def login():
 
         conn = get_db()
         try:
-            if hasattr(conn, 'use_autocommit_reads'):
-                conn.use_autocommit_reads()
             user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         finally:
             conn.close()
@@ -701,7 +577,7 @@ def register():
     return render_template('register.html')
 
 
-@app.route('/logout', methods=['POST'])
+@app.route('/logout')
 def logout():
     session.clear()
     flash('정상적으로 로그아웃되었습니다.', 'info')
@@ -716,27 +592,12 @@ def logout():
 @login_required
 def dashboard():
     user_id = session['user_id']
-    today = korea_today()
+
     now = time.time()
-    dashboard_cache_key = f"dashboard_ctx:{today.isoformat()}"
-    cached_dashboard_ctx = get_valid_user_cache_value(user_id, dashboard_cache_key)
-    if cached_dashboard_ctx is not _CACHE_MISS:
-        return render_template('dashboard.html', **cached_dashboard_ctx)
-
-    conn = None
-
-    def read_conn():
-        nonlocal conn
-        if conn is None:
-            conn = get_db()
-            if hasattr(conn, 'use_autocommit_reads'):
-                conn.use_autocommit_reads()
-        return conn
-
+    conn = get_db()
     try:
-        rows = get_valid_user_cache_value(user_id, 'monthly_summary')
-        if rows is _CACHE_MISS:
-            rows = get_cached_monthly_summary(read_conn(), user_id)
+        # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
+        rows = get_cached_monthly_summary(conn, user_id)
 
         if rows:
             last_r = rows[-1]
@@ -750,10 +611,8 @@ def dashboard():
                 'diff': int(last_r['prev_month_diff'] or 0)
             }
         else:
-            current_month = {
-                'year': today.year, 'month': today.month, 'dispensing_plus_daily': 0,
-                'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0
-            }
+            now_dt = datetime.date.today()
+            current_month = {'year': now_dt.year, 'month': now_dt.month, 'dispensing_plus_daily': 0, 'non_insurance': 0, 'extra_profit_total': 0, 'grand_total': 0, 'diff': 0}
 
         monthly_data = {
             'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
@@ -766,71 +625,62 @@ def dashboard():
         years_data = {}
         for r in rows:
             yr = int(r['year'])
-            years_data.setdefault(yr, [0] * 12)[int(r['month']) - 1] = int(r['grand_total'])
+            if yr not in years_data:
+                years_data[yr] = [0] * 12
+            years_data[yr][int(r['month']) - 1] = int(r['grand_total'])
+
         year_compare = {
             'labels': [f'{m}월' for m in range(1, 13)],
             'datasets': [
                 {'label': f'{yr}년', 'data': [int(v) for v in data]}
-                for yr, data in sorted(years_data.items()) if any(v > 0 for v in data)
+                for yr, data in sorted(years_data.items())
+                if any(v > 0 for v in data)
             ]
         }
 
+        # [초고속 스마트 캐시 2] 당월 daily_profit 데이터 캐시 조회 (캐시 히트 시 DB 0ms)
         cur_year = current_month['year']
         cur_month = current_month['month']
-        analysis_key = f"analysis:{cur_year:04d}-{cur_month:02d}:{today.isoformat()}"
-        analysis_rows = get_valid_user_cache_value(user_id, analysis_key)
-        if analysis_rows is _CACHE_MISS:
-            analysis_rows = get_cached_analysis_rows(read_conn(), user_id, cur_year, cur_month)
-        cur_month_rows = [
-            r for r in analysis_rows
-            if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')
-        ]
+        analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
+        cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
+        schedule = get_business_schedule(conn, user_id)
 
-        schedule = get_valid_user_cache_value(user_id, 'business_schedule')
-        if schedule is _CACHE_MISS:
-            schedule = get_cached_business_schedule(read_conn(), user_id)
+        # [초고속 스마트 캐시 3] 요일별 평균 캐시 조회 (캐시 히트 시 DB 0ms)
+        dow_avg = None
 
-        last_year_total = next((
-            int(r['grand_total'] or 0) for r in rows
-            if int(r['year']) == cur_year - 1 and int(r['month']) == cur_month
-        ), 0)
+        # 작년 동월 총합 (이미 rows에 있으므로 쿼리 0회!)
+        last_year_total = 0
+        for r in rows:
+            if int(r['year']) == cur_year - 1 and int(r['month']) == cur_month:
+                last_year_total = int(r['grand_total'] or 0)
+                break
 
+        # 최신일 레코드 (당월 데이터가 있으면 인메모리에서 바로 추출, 쿼리 0회)
         if cur_month_rows:
-            latest_row = next((r for r in reversed(cur_month_rows) if r['date'] <= today.isoformat()), None)
+            latest_row = next((r for r in reversed(cur_month_rows) if r['date'] <= korea_today().isoformat()), None)
         else:
-            latest_row = read_conn().execute(
+            latest_row = conn.execute(
                 'SELECT * FROM daily_profit WHERE user_id = ? AND date <= ? ORDER BY date DESC LIMIT 1',
-                (user_id, today.isoformat())
+                (user_id, korea_today().isoformat())
             ).fetchone()
 
-        cur_cum = (
-            sum(int(r['total'] or 0) for r in cur_month_rows)
-            if cur_month_rows else (int(latest_row['total'] or 0) if latest_row else 0)
-        )
-        month_summary_row = rows[-1] if rows else {}
-        forecast = get_month_forecast(
-            conn, user_id, cur_year, cur_month,
-            entered_rows=cur_month_rows, dow_avg=None, last_year_total=last_year_total,
-            schedule=schedule, history_rows=analysis_rows, month_summary_row=month_summary_row
-        )
-        comparison_rows = analysis_rows if latest_row and latest_row in cur_month_rows else None
-        yoy_day = get_yoy_day_comparison(
-            conn, user_id, today_row=latest_row, comparison_rows=comparison_rows
-        )
-        balance = get_profit_balance_diagnosis(
-            conn, user_id, cur_year, cur_month,
-            entered_rows=cur_month_rows, month_summary_row=month_summary_row
-        )
-        narrative_briefing = get_ai_narrative_briefing(
-            conn, user_id, current_month, forecast,
-            latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows,
-            comparison_rows=comparison_rows
-        )
+        # 당월 누적 합계 (인메모리 즉시 계산)
+        cur_cum = sum(int(r['total'] or 0) for r in cur_month_rows) if cur_month_rows else (int(latest_row['total'] or 0) if latest_row else 0)
 
-        weekly_key = f"weekly_stats:4:{today.isoformat()}"
-        weekly_stats = get_valid_user_cache_value(user_id, weekly_key)
-        if weekly_stats is _CACHE_MISS:
-            weekly_stats = get_cached_weekly_stats(read_conn(), user_id, rows=analysis_rows)
+        # 헬퍼 호출 (사전 로딩 데이터 활용으로 DB 쿼리 최소화)
+        forecast = get_month_forecast(conn, user_id, cur_year, cur_month,
+                                      entered_rows=cur_month_rows, dow_avg=dow_avg, last_year_total=last_year_total,
+                                      schedule=schedule, history_rows=analysis_rows,
+                                      month_summary_row=rows[-1] if rows else {})
+        # A summary-only selected month may fall back to a much older daily row.
+        comparison_rows = analysis_rows if latest_row and latest_row in cur_month_rows else None
+        yoy_day = get_yoy_day_comparison(conn, user_id, today_row=latest_row, comparison_rows=comparison_rows)
+        balance = get_profit_balance_diagnosis(conn, user_id, cur_year, cur_month,
+                                               entered_rows=cur_month_rows,
+                                               month_summary_row=rows[-1] if rows else {})
+        narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast,
+                                                       latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows, comparison_rows=comparison_rows)
+        weekly_stats = get_recent_weeks_profit_stats(conn, user_id, rows=analysis_rows)
 
         dashboard_ctx = {
             'current_month': current_month,
@@ -843,12 +693,15 @@ def dashboard():
             'narrative_briefing': narrative_briefing,
             'weekly_stats': weekly_stats
         }
+
+        # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
+        recent_preload = [dict(r) for r in reversed(cur_month_rows[-20:])] if cur_month_rows else []
         with _CACHE_LOCK:
-            bucket = _USER_CACHE.setdefault(user_id, {})
-            bucket[dashboard_cache_key] = {'ts': now, 'data': dashboard_ctx}
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
     finally:
-        if conn is not None:
-            conn.close()
+        conn.close()
 
     return render_template('dashboard.html', **dashboard_ctx)
 
@@ -884,7 +737,7 @@ def input_sales():
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
                 ''', (user_id, date_str, dow, dispensing, daily_net, dpd, non_insurance, total, memo))
                 recalc_monthly_summary(conn, user_id, dt.year, dt.month)
-                invalidate_daily_profit_cache(user_id)
+                invalidate_user_cache(user_id)
                 flash(f'{date_str} ({dow}) 순익이 저장되었습니다. 합계: {total:,}원', 'success')
             except Exception as e:
                 try:
@@ -903,34 +756,31 @@ def input_sales():
 
     # GET: ⚡ 초고속 스마트 캐시 활용 (DB 연결 0회, 0ms 즉시 응답!)
     now = time.time()
-    today = korea_today().isoformat()
     recent = None
     yoy_day = None
     with _CACHE_LOCK:
         if user_id in _USER_CACHE:
             entry = _USER_CACHE[user_id].get('input_cache')
-            if entry and entry.get('date') == today and (now - entry['ts'] < _CACHE_TTL):
+            if entry and (now - entry['ts'] < _CACHE_TTL):
                 recent = entry['recent']
                 yoy_day = entry['yoy_day']
 
     if recent is None:
         conn = get_db()
         try:
-            if hasattr(conn, 'use_autocommit_reads'):
-                conn.use_autocommit_reads()
             recent_raw = conn.execute('''
                 SELECT * FROM daily_profit WHERE user_id = ? ORDER BY date DESC LIMIT 20
             ''', (user_id,)).fetchall()
             recent = [dict(r) for r in recent_raw]
-            latest = next((row for row in recent if row['date'] <= today), None)
-            yoy_day = get_yoy_day_comparison(conn, user_id, today_row=latest)
+            yoy_day = get_yoy_day_comparison(conn, user_id)
             with _CACHE_LOCK:
                 if user_id not in _USER_CACHE:
                     _USER_CACHE[user_id] = {}
-                _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'date': today, 'recent': recent, 'yoy_day': yoy_day}
+                _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent, 'yoy_day': yoy_day}
         finally:
             conn.close()
 
+    today = datetime.date.today().isoformat()
     return render_template('input.html', today=today, recent_sales=recent, yoy_day=yoy_day)
 
 
@@ -972,18 +822,7 @@ def save_business_schedule():
         conn.commit()
     finally:
         conn.close()
-    user_id = session['user_id']
-    invalidate_user_cache_keys(
-        user_id,
-        keys=('business_schedule',),
-        prefixes=('dashboard_ctx:', 'calendar_ctx:')
-    )
-    with _CACHE_LOCK:
-        bucket = _USER_CACHE.setdefault(user_id, {})
-        bucket['business_schedule'] = {
-            'ts': time.time(),
-            'data': {'weekdays': weekdays, 'closed_dates': closed, 'open_dates': opened}
-        }
+    invalidate_user_cache(session['user_id'])
     flash('영업 일정이 저장되었습니다. 예측과 미입력일을 다시 계산했습니다.', 'success')
     return redirect(url_for('calendar_view', year=year, month=month))
 
@@ -992,41 +831,19 @@ def save_business_schedule():
 @login_required
 def calendar_view():
     user_id = session['user_id']
-    today = korea_today()
-    now = time.time()
-    requested_year = request.args.get('year', type=int)
-    requested_month = request.args.get('month', type=int)
-    calendar_cache_key = (
-        f"calendar_ctx:{requested_year if requested_year is not None else 'default'}:"
-        f"{requested_month if requested_month is not None else 'default'}:{today.isoformat()}"
-    )
-    cached_calendar_ctx = get_valid_user_cache_value(user_id, calendar_cache_key)
-    if cached_calendar_ctx is not _CACHE_MISS:
-        session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
-        return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **cached_calendar_ctx)
-
-    conn = None
-
-    def read_conn():
-        nonlocal conn
-        if conn is None:
-            conn = get_db()
-            if hasattr(conn, 'use_autocommit_reads'):
-                conn.use_autocommit_reads()
-        return conn
-
+    conn = get_db()
     try:
-        m_rows = get_valid_user_cache_value(user_id, 'monthly_summary')
-        if m_rows is _CACHE_MISS:
-            m_rows = get_cached_monthly_summary(read_conn(), user_id)
-        years = sorted({int(r['year']) for r in m_rows}, reverse=True)
+        # [초고속 스마트 캐시 1] 월별 요약 캐시에서 연도 목록 및 최신 월 도출 (DB 연결/쿼리 0회, 0ms)
+        m_rows = get_cached_monthly_summary(conn, user_id)
+        years = sorted(list(set(int(r['year']) for r in m_rows)), reverse=True)
 
         if m_rows:
             last_m = m_rows[-1]
             default_year = int(last_m['year'])
             default_month = int(last_m['month'])
         else:
-            default_year, default_month = today.year, today.month
+            today_dt = datetime.date.today()
+            default_year, default_month = today_dt.year, today_dt.month
 
         year = request.args.get('year', default_year, type=int)
         month = request.args.get('month', default_month, type=int)
@@ -1036,60 +853,52 @@ def calendar_view():
         prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
         next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
 
-        analysis_key = f"analysis:{year:04d}-{month:02d}:{today.isoformat()}"
-        analysis_rows = get_valid_user_cache_value(user_id, analysis_key)
-        if analysis_rows is _CACHE_MISS:
-            analysis_rows = get_cached_analysis_rows(read_conn(), user_id, year, month)
+        analysis_rows = load_analysis_rows(conn, user_id, year, month)
         rows = [r for r in analysis_rows if r['date'].startswith(f'{year:04d}-{month:02d}-')]
-        profit_by_day = {int(r['date'].split('-')[2]): r for r in rows}
+
+        profit_by_day = {}
+        for r in rows:
+            d_num = int(r['date'].split('-')[2])
+            profit_by_day[d_num] = r
+
         cal_weeks = calendar.Calendar(firstweekday=calendar.SUNDAY).monthdayscalendar(year, month)
-        month_summary = next(
-            (r for r in m_rows if int(r['year']) == year and int(r['month']) == month), None
-        )
+
+        # 당월 월별 요약 (인메모리 캐시에서 즉시 추출, 쿼리 0회)
+        month_summary = next((r for r in m_rows if int(r['year']) == year and int(r['month']) == month), None)
+
         total_days_worked = len(rows)
-        avg_daily = (
-            int(month_summary['grand_total']) // total_days_worked
-            if month_summary and total_days_worked > 0 else 0
-        )
-        last_year_total = next((
-            int(r['grand_total']) for r in m_rows
-            if int(r['year']) == year - 1 and int(r['month']) == month
-        ), 0)
+        avg_daily = int(month_summary['grand_total']) // total_days_worked if (month_summary and total_days_worked > 0) else 0
 
-        business_schedule = get_valid_user_cache_value(user_id, 'business_schedule')
-        if business_schedule is _CACHE_MISS:
-            business_schedule = get_cached_business_schedule(read_conn(), user_id)
-        forecast = get_month_forecast(
-            conn, user_id, year, month, entered_rows=rows,
+        dow_avg = None
+        last_year_total = next((int(r['grand_total']) for r in m_rows if int(r['year']) == year - 1 and int(r['month']) == month), 0)
+
+        business_schedule = get_business_schedule(conn, user_id)
+        forecast = get_month_forecast(conn, user_id, year, month, entered_rows=rows,
             last_year_total=last_year_total, schedule=business_schedule,
-            history_rows=analysis_rows, month_summary_row=month_summary or {}
-        )
+            history_rows=analysis_rows, month_summary_row=month_summary or {})
+
     finally:
-        if conn is not None:
-            conn.close()
-
-    calendar_ctx = {
-        'year': year,
-        'month': month,
-        'years': years,
-        'prev_year': prev_year,
-        'prev_month': prev_month,
-        'next_year': next_year,
-        'next_month': next_month,
-        'cal_weeks': cal_weeks,
-        'profit_by_day': profit_by_day,
-        'month_summary': month_summary,
-        'total_days_worked': total_days_worked,
-        'avg_daily': avg_daily,
-        'business_schedule': business_schedule,
-        'forecast': forecast,
-    }
-    with _CACHE_LOCK:
-        bucket = _USER_CACHE.setdefault(user_id, {})
-        bucket[calendar_cache_key] = {'ts': now, 'data': calendar_ctx}
-
+        conn.close()
     session.setdefault('schedule_csrf', secrets.token_urlsafe(32))
-    return render_template('calendar.html', schedule_csrf=session['schedule_csrf'], **calendar_ctx)
+
+    return render_template(
+        'calendar.html',
+        year=year,
+        month=month,
+        years=years,
+        prev_year=prev_year,
+        prev_month=prev_month,
+        next_year=next_year,
+        next_month=next_month,
+        cal_weeks=cal_weeks,
+        profit_by_day=profit_by_day,
+        month_summary=month_summary,
+        total_days_worked=total_days_worked,
+        avg_daily=avg_daily,
+        business_schedule=business_schedule,
+        schedule_csrf=session['schedule_csrf'],
+        forecast=forecast
+    )
 
 
 @app.route('/report')
@@ -1101,8 +910,7 @@ def report():
     all_rows = sorted(raw_rows, key=lambda r: (-int(r['year']), int(r['month'])))
 
     years = sorted(list(set(int(r['year']) for r in all_rows)), reverse=True)
-    today = korea_today()
-    selected_year = request.args.get('year', years[0] if years else today.year, type=int)
+    selected_year = request.args.get('year', years[0] if years else datetime.date.today().year, type=int)
     last_year = selected_year - 1
 
     report_data = []
@@ -1159,38 +967,12 @@ def report():
             'grand': last_year_grand
         }
 
-    # 전년 비교는 같은 기간끼리만 계산한다. 진행 중인 현재 월은 완료월 비교에서 제외한다.
-    previous_by_month = {
-        int(r['month']): int(r['grand_total'] or 0)
-        for r in all_rows if int(r['year']) == last_year
-    }
-    comparable_rows = [
-        r for r in report_data
-        if not (selected_year == today.year and int(r['month']) >= today.month)
-    ]
-    comparison_months = [int(r['month']) for r in comparable_rows]
-    comparison_complete = bool(comparison_months) and all(m in previous_by_month for m in comparison_months)
-    comparison_current_total = sum(int(r['grand_total']) for r in comparable_rows) if comparison_complete else None
-    comparison_previous_total = (
-        sum(previous_by_month[m] for m in comparison_months) if comparison_complete else None
-    )
+    # 전년 대비 성장률
     yoy_growth_pct = None
-    yoy_diff = None
-    yoy_label = None
-    yoy_badge_label = None
-    if comparison_previous_total is not None and comparison_previous_total > 0:
-        yoy_diff = comparison_current_total - comparison_previous_total
-        yoy_growth_pct = round((yoy_diff / float(comparison_previous_total)) * 100, 1)
-        contiguous = comparison_months == list(range(1, max(comparison_months) + 1))
-        if selected_year == today.year:
-            yoy_label = (
-                f"전년 동기간 증감률 (1~{max(comparison_months)}월)"
-                if contiguous else "전년 동일 완료월 증감률"
-            )
-            yoy_badge_label = "전년동기간"
-        else:
-            yoy_label = "전년 동일 입력월 증감률"
-            yoy_badge_label = "전년동월"
+    yoy_diff = 0
+    if last_year_total and last_year_total['grand'] > 0:
+        yoy_diff = year_total['grand'] - last_year_total['grand']
+        yoy_growth_pct = round((yoy_diff / float(last_year_total['grand'])) * 100, 1)
 
     # 최고/최저 실적 달
     best_month = max(report_data, key=lambda r: r['grand_total']) if report_data else None
@@ -1219,11 +1001,7 @@ def report():
 
     # 연간 줄글 분석 생성
     narrative_paragraphs = generate_annual_narrative_report(
-        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters,
-        comparison_current_total=comparison_current_total,
-        comparison_previous_total=comparison_previous_total,
-        comparison_label=yoy_label,
-        use_period_comparison=True,
+        selected_year, report_data, year_total, last_year_total, best_month, worst_month, quarters
     )
 
     # 12개월 전체 배열 (작년 vs 올해 콤보 차트용)
@@ -1251,8 +1029,6 @@ def report():
                            last_year_total=last_year_total,
                            yoy_growth_pct=yoy_growth_pct,
                            yoy_diff=yoy_diff,
-                           yoy_label=yoy_label,
-                           yoy_badge_label=yoy_badge_label,
                            best_month=best_month,
                            worst_month=worst_month,
                            avg_monthly=avg_monthly,
@@ -1422,7 +1198,7 @@ def calculator():
         settings = defaults
 
     # ⚡ 현재 월 실적 조회 (원클릭 자동 불러오기용) - 캐시된 당월 일별 데이터 활용
-    today = korea_today()
+    today = datetime.date.today()
     cur_month_rows = get_cached_current_month_dailies(None, user_id, today.year, today.month)
     disp = sum(int(r.get('dispensing_fee') or 0) for r in cur_month_rows)
     daily = sum(int(r.get('daily_net_profit') or 0) for r in cur_month_rows)
@@ -1468,7 +1244,7 @@ def save_calculator_settings():
             conn.execute(f"INSERT INTO user_calculator_settings ({col_clause}) VALUES ({val_clause})", params)
 
         conn.commit()
-        invalidate_user_cache_keys(user_id, keys=('calculator_settings',))
+        invalidate_user_cache(user_id)
     finally:
         conn.close()
     return jsonify({'success': True, 'message': '계산기 설정값이 안전하게 저장되었습니다.'})
@@ -1602,7 +1378,7 @@ def upload_excel():
                     recalc_monthly_summary(conn, user_id, yr, mo, commit=False)
 
                 conn.commit()
-                invalidate_daily_profit_cache(user_id)
+                invalidate_user_cache(user_id)
                 flash(f'🎉 표준 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 데이터가 등록되었습니다)', 'success')
                 return redirect(url_for('dashboard'))
 
@@ -1709,7 +1485,7 @@ def upload_excel():
                         pass
 
             conn.commit()
-            invalidate_daily_profit_cache(user_id)
+            invalidate_user_cache(user_id)
             flash(f'🎉 엑셀 데이터 가져오기 완료! (총 {imported_count}일치 순익 데이터가 등록되었습니다)', 'success')
         finally:
             conn.close()
@@ -1743,7 +1519,7 @@ def admin_dashboard():
         return redirect(url_for('dashboard'))
 
 
-@app.route('/admin/switch_user/<int:target_user_id>', methods=['POST'])
+@app.route('/admin/switch_user/<int:target_user_id>')
 @admin_required
 def admin_switch_user(target_user_id):
     """관리자가 특정 약국의 계정으로 전환하여 데이터를 점검/둘러보기"""
@@ -1770,7 +1546,7 @@ def admin_switch_user(target_user_id):
     return redirect(url_for('dashboard'))
 
 
-@app.route('/admin/switch_back', methods=['POST'])
+@app.route('/admin/switch_back')
 @login_required
 def admin_switch_back():
     """관리자 원래 계정으로 복귀"""
@@ -1963,6 +1739,7 @@ def internal_server_error(e):
 
 
 if __name__ == '__main__':
+    init_db()
     bootstrap_app_extensions()
     print("\n=== 약국 순익 관리 시스템 (다중 약국 온라인 SaaS) 시작 ===")
     print("접속 주소: http://localhost:5000\n")

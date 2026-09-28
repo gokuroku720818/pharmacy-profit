@@ -64,26 +64,6 @@ def test_real_postgres_rollback_prevents_transaction_leak(postgres_pool):
         two.close()
 
 
-def test_real_postgres_read_checkout_returns_transactional_connection(postgres_pool):
-    read = database.get_db()
-    try:
-        read.use_autocommit_reads()
-        assert read.execute('SELECT 1 AS value').fetchone()['value'] == 1
-    finally:
-        read.close()
-    write = database.get_db()
-    try:
-        assert write.conn.autocommit is False
-        write.execute('CREATE TEMP TABLE perf_ci_read_reset (id integer)')
-    finally:
-        write.close()
-    check = database.get_db()
-    try:
-        assert check.execute("SELECT to_regclass('pg_temp.perf_ci_read_reset') AS relation").fetchone()['relation'] is None
-    finally:
-        check.close()
-
-
 def test_real_postgres_four_concurrent_requests_release_connections(postgres_pool):
     barrier = threading.Barrier(4)
 
@@ -98,32 +78,3 @@ def test_real_postgres_four_concurrent_requests_release_connections(postgres_poo
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         assert list(executor.map(request, range(4))) == [1, 1, 1, 1]
     assert len(postgres_pool._used) == 0
-
-
-def test_real_postgres_batch_import_preserves_order_and_transaction(postgres_pool):
-    import datetime as dt
-    from daily_only import DailyImportBatch, _daily_upsert
-    connection = database.get_db()
-    try:
-        connection.execute('''CREATE TEMP TABLE daily_profit (
-            user_id INTEGER NOT NULL, date TEXT NOT NULL, day_of_week TEXT,
-            dispensing_fee BIGINT, daily_net_profit BIGINT, dispensing_plus_daily BIGINT,
-            non_insurance_margin BIGINT, total BIGINT, updated_at TIMESTAMP,
-            memo TEXT, UNIQUE(user_id,date)) ON COMMIT DROP''')
-        batch = DailyImportBatch(connection)
-        for i in range(450):
-            day = dt.date(2024, 1, 1) + dt.timedelta(days=i)
-            _daily_upsert(batch, 1, day, 100, 20, 10, 130, memo='saved memo')
-        # Changing statement shape flushes pending rows; later legacy rows
-        # preserve the memo and update amounts for the same date.
-        _daily_upsert(batch, 1, dt.date(2024, 1, 1), 200, 20, 10, 230)
-        batch.flush()
-        row = connection.execute('SELECT COUNT(*) AS n, SUM(total) AS total FROM daily_profit').fetchone()
-        assert row['n'] == 450 and row['total'] == 58600
-        first = connection.execute("SELECT memo,total FROM daily_profit WHERE date='2024-01-01'").fetchone()
-        assert first['memo'] == 'saved memo' and first['total'] == 230
-        connection.rollback()
-        assert connection.execute("SELECT to_regclass('pg_temp.daily_profit') AS relation").fetchone()['relation'] is None
-    finally:
-        connection.rollback()
-        connection.close()

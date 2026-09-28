@@ -11,11 +11,11 @@ def service(tmp_path, monkeypatch):
     monkeypatch.delenv('DATABASE_URL', raising=False)
     import database
     monkeypatch.setattr(database, 'SQLITE_PATH', str(tmp_path / 'sales.db'))
-    database.init_db()
     if 'app' not in sys.modules:
         module = importlib.import_module('app')
     else:
         module = sys.modules['app']
+        database.init_db()
     import profit_analysis
     monkeypatch.setattr(profit_analysis, 'korea_today', lambda: dt.date(2026, 9, 19))
     monkeypatch.setattr(module, 'korea_today', lambda: dt.date(2026, 9, 19))
@@ -137,9 +137,7 @@ def test_annual_briefing_does_not_claim_stability_from_decline(service):
 def client_for(service, user=1):
     client = service.app.test_client()
     with client.session_transaction() as session:
-        session.update(user_id=user, username='tester', pharmacy_name='Test',
-                       schedule_csrf='test-token', _form_csrf='test-token')
-    client.environ_base['HTTP_X_CSRF_TOKEN'] = 'test-token'
+        session.update(user_id=user, username='tester', pharmacy_name='Test', schedule_csrf='test-token')
     return client
 
 
@@ -252,15 +250,12 @@ def test_dashboard_query_budget_and_fresh_values(service, conn, monkeypatch):
     statements.clear()
     conn.execute("UPDATE daily_profit SET total=99999 WHERE user_id=1 AND date='2026-09-19'")
     conn.commit()
-    # Production writes invalidate this user bucket after commit. This direct SQL
-    # mutation bypasses the route, so mirror the application's cache contract.
-    service.invalidate_user_cache(1)
     response = client.get('/')
     assert '99,999' in response.get_data(as_text=True)
     base_queries = [sql for sql in statements if 'extra_profit' not in sql]
     misc_queries = [sql for sql in statements if 'extra_profit' in sql]
-    assert len(base_queries) <= 3, statements
-    assert len(misc_queries) <= 2, statements
+    assert len(base_queries) <= 2, statements
+    assert len(misc_queries) <= 1, statements
 
 
 def test_login_needs_no_external_render_dependencies(service):
@@ -297,82 +292,17 @@ def test_calendar_uses_one_connection(service, conn, monkeypatch):
     assert len(calls) == 1
 
 
-def test_dashboard_and_calendar_second_request_need_no_database(service, conn, monkeypatch):
-    add(conn, '2026-09-19')
-    service.recalc_monthly_summary(conn, 1, 2026, 9)
-    client = client_for(service)
-    assert client.get('/').status_code == 200
-    assert client.get('/calendar?year=2026&month=9').status_code == 200
-
-    def no_db():
-        raise AssertionError('cached financial page unexpectedly opened the database')
-
-    monkeypatch.setattr(service, 'get_db', no_db)
-    import profit_display
-    monkeypatch.setattr(profit_display, 'get_db', no_db)
-    assert client.get('/').status_code == 200
-    assert client.get('/calendar?year=2026&month=9').status_code == 200
-
-
-def test_current_year_report_compares_only_completed_months(service, conn):
-    for month in range(1, 9):
-        conn.execute(
-            'INSERT INTO monthly_summary '
-            '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
-            'VALUES (1,2025,?,?,?, ?,0)',
-            (month, 90, 10, 100),
-        )
-        conn.execute(
-            'INSERT INTO monthly_summary '
-            '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
-            'VALUES (1,2026,?,?,?, ?,0)',
-            (month, 180, 20, 200),
-        )
-    # September is still in progress on the fixture date (2026-09-19) and must
-    # not be compared against the previous year's full September.
-    conn.execute(
-        'INSERT INTO monthly_summary '
-        '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
-        'VALUES (1,2026,9,9000,999,9999,0)'
-    )
-    conn.execute(
-        'INSERT INTO monthly_summary '
-        '(user_id,year,month,dispensing_plus_daily_total,non_insurance_total,grand_total,prev_month_diff) '
-        'VALUES (1,2025,9,900,100,1000,0)'
-    )
-    conn.commit()
-    service.invalidate_user_cache(1)
-
-    html = client_for(service).get('/report?year=2026').get_data(as_text=True)
-    assert '전년 동기간 증감률 (1~8월)' in html
-    assert '+100.0%' in html
-    assert '진행 중인 현재 월은 완료월 비교에서 제외합니다.' in html
-    assert '연간 최고 매출 정점' not in html
-
-
-def test_dashboard_labels_364_day_comparison_as_52_weeks(service, conn):
-    add(conn, '2025-09-20')
-    add(conn, '2026-09-19')
-    service.recalc_monthly_summary(conn, 1, 2026, 9)
-    html = client_for(service).get('/').get_data(as_text=True)
-    assert '52주 전 같은 요일 vs 최근 영업일 비교' in html
-    assert '작년 오늘 vs 올해 오늘' not in html
-
-
 def test_login_success_and_failure_with_synthetic_credentials(service, conn):
     from werkzeug.security import generate_password_hash
     conn.execute('UPDATE users SET username=?, password_hash=? WHERE id=1',
                  ('speed-test-user', generate_password_hash('synthetic-test-password')))
     conn.commit()
     client = service.app.test_client()
-    client.get('/login')
-    with client.session_transaction() as sess:
-        token = sess['_form_csrf']
-    rejected = client.post('/login', data={'csrf_token': token, 'username': 'speed-test-user', 'password': 'wrong'})
+    rejected = client.post('/login', data={'username': 'speed-test-user', 'password': 'wrong'})
     assert rejected.status_code == 200
     with client.session_transaction() as session:
         assert 'user_id' not in session
-    accepted = client.post('/login', data={'csrf_token': token, 'username': 'speed-test-user', 'password': 'synthetic-test-password'})
+    accepted = client.post('/login', data={'username': 'speed-test-user', 'password': 'synthetic-test-password'})
     assert accepted.status_code == 302
     with client.session_transaction() as session:
         assert session['user_id'] == 1

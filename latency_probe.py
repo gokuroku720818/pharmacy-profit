@@ -6,7 +6,6 @@ The POST /login is the only non-GET operation. No customer data is printed.
 
 import argparse
 import http.cookiejar
-from html.parser import HTMLParser
 import json
 import math
 import os
@@ -24,18 +23,6 @@ PAGES = (
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl):
         return None
-
-
-class LoginTokenParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.token = None
-
-    def handle_starttag(self, tag, attrs):
-        if tag == 'input':
-            attributes = dict(attrs)
-            if attributes.get('name') == 'csrf_token':
-                self.token = attributes.get('value')
 
 
 def validate_url(url):
@@ -57,7 +44,7 @@ def percentiles(values):
             'max_ms': ordered[-1]}
 
 
-def _request(opener, url, body=None, timeout=15, capture_csrf=False):
+def _request(opener, url, body=None, timeout=15):
     headers = {'User-Agent': 'PharmacyLatencyProbe/1.0'}
     if body is not None:
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
@@ -71,29 +58,21 @@ def _request(opener, url, body=None, timeout=15, capture_csrf=False):
             response = exc
         with response:
             status = response.status
-            response_body = response.read()
+            response.read()
     except Exception:
         # Never print the underlying URL or credentials to stdout.
         raise RuntimeError('HTTP probe failed; inspect server logs privately') from None
-    result = {'status': status, 'ms': round((time.perf_counter() - start) * 1000, 1)}
-    if capture_csrf:
-        parser = LoginTokenParser()
-        parser.feed(response_body.decode('utf-8', errors='replace'))
-        result['csrf_token'] = parser.token
-    return result
+    return {'status': status, 'ms': round((time.perf_counter() - start) * 1000, 1)}
 
 
 def run_cycle(base_url, username, password):
     origin = validate_url(base_url)
     opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()), NoRedirect())
     readings = {}
-    readings['login_get'] = _request(opener, origin + '/login', capture_csrf=True)
+    readings['login_get'] = _request(opener, origin + '/login')
     if readings['login_get']['status'] != 200:
         raise RuntimeError('Login form did not return HTTP 200')
-    csrf_token = readings['login_get'].pop('csrf_token')
-    if not csrf_token:
-        raise RuntimeError('Login form has no CSRF token')
-    body = urlencode({'username': username, 'password': password, 'csrf_token': csrf_token}).encode()
+    body = urlencode({'username': username, 'password': password}).encode()
     readings['login_post'] = _request(opener, origin + '/login', body)
     if readings['login_post']['status'] != 302:
         raise RuntimeError('Login did not redirect; verify dedicated test account privately')

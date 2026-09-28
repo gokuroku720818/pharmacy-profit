@@ -35,15 +35,8 @@ def get_month_forecast(conn, user_id, year, month, entered_rows=None, dow_avg=No
     low/high are observed weekday minima/maxima, NOT confidence intervals.
     Keep dow_avg in the call signature for older callers, but never use lifetime averages.
     """
-    needs_db = (
-        history_rows is None or schedule is None or entered_rows is None
-        or month_summary_row is None or last_year_total is None
-    )
-    owned = conn is None and needs_db
-    if owned:
-        conn = get_db()
-        if hasattr(conn, 'use_autocommit_reads'):
-            conn.use_autocommit_reads()
+    owned = conn is None
+    conn = conn or get_db()
     try:
         today = as_of or korea_today()
         start = dt.date(year, month, 1)
@@ -155,12 +148,8 @@ def get_yoy_day_comparison(conn, user_id, date_str=None, today_row=None, compari
 
 def get_profit_balance_diagnosis(conn, user_id, year, month, entered_rows=None, month_summary_row=None):
     if entered_rows is None:
-        start = dt.date(year, month, 1)
-        next_month = (start.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
-        entered_rows = conn.execute(
-            'SELECT * FROM daily_profit WHERE user_id = ? AND date >= ? AND date < ?',
-            (user_id, start.isoformat(), next_month.isoformat())
-        ).fetchall()
+        entered_rows = conn.execute('SELECT * FROM daily_profit WHERE user_id = ? AND date LIKE ?',
+                                    (user_id, f'{year}-{month:02d}%')).fetchall()
     entered_rows = [r for r in entered_rows if r['date'] <= korea_today().isoformat()]
     values = [sum(int(r[field] or 0) for r in entered_rows) for field, _ in FIELDS]
     total = sum(values)
@@ -255,28 +244,13 @@ def get_ai_narrative_briefing(conn, user_id, current_month, forecast, latest_row
 
 
 def generate_annual_narrative_report(year, report_data, year_total, last_year_total,
-                                     best_month, worst_month, quarterly_data,
-                                     comparison_current_total=None, comparison_previous_total=None,
-                                     comparison_label=None, use_period_comparison=False):
+                                     best_month, worst_month, quarterly_data):
     if not report_data:
         return None
     total = int(year_total['grand'])
     paragraphs = [f"{year}년 입력된 {len(report_data)}개월의 합계는 <strong>{total:,}원</strong>, "
                   f"입력월 평균은 {total//len(report_data):,}원입니다."]
-    if use_period_comparison:
-        if comparison_current_total is not None and comparison_previous_total:
-            change = int(comparison_current_total)-int(comparison_previous_total)
-            direction = '증가' if change > 0 else '감소' if change < 0 else '동일'
-            label = comparison_label or '전년 동일 기간'
-            paragraphs.append(
-                f'{label} 기준으로 {abs(change):,}원 {direction}입니다. '
-                '진행 중인 현재 월은 완료월 비교에서 제외합니다.'
-            )
-        elif last_year_total:
-            paragraphs.append(
-                '전년도 저장 자료는 있으나 같은 기간의 월 자료가 완전하지 않아 증감률을 계산하지 않았습니다.'
-            )
-    elif last_year_total:
+    if last_year_total:
         change = total-int(last_year_total['grand'])
         direction = '증가' if change > 0 else '감소' if change < 0 else '동일'
         paragraphs.append(f'전년도 저장 합계와 단순 비교하면 {abs(change):,}원 {direction}입니다. '

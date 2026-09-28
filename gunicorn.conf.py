@@ -4,16 +4,12 @@ Gunicorn loads this file automatically from the working directory. The
 Procfile and any Render custom start command must also use one worker;
 explicit CLI --workers overrides this default. Four threads remain enabled.
 """
-import os
-
 workers = 1
 worker_class = 'gthread'
 threads = 4
 keepalive = 65
 timeout = 120
-max_requests = 1000
-max_requests_jitter = 50
-worker_tmp_dir = '/dev/shm' if os.path.exists('/dev/shm') else None
+max_requests = 0  # 🔒 단일 워커 환경: 요청 수 도달 시 워커 재시작으로 인한 502 다운타임 방지 (영구 유지)
 
 
 def post_worker_init(worker):
