@@ -496,8 +496,18 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
 @app.route('/ping', methods=['GET', 'HEAD', 'POST'])
 @app.route('/health', methods=['GET', 'HEAD', 'POST'])
 def ping():
-    """cron-job.org / UptimeRobot 찌르기 전용 초경량 엔드포인트 (출력 크기 2바이트: output too large 에러 영구 방지)"""
-    return 'ok', 200, {'Content-Type': 'text/plain'}
+    """cron-job.org / UptimeRobot 찌르기 전용 초경량 엔드포인트 (2바이트 고정 Content-Length 명시)"""
+    from flask import Response
+    return Response(
+        'ok',
+        status=200,
+        mimetype='text/plain',
+        headers={
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Length': '2',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }
+    )
 
 
 # ==========================================
