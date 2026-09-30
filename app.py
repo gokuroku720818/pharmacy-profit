@@ -1155,12 +1155,206 @@ def trend():
                 months.append({'value': int(val), 'color': color, 'text_color': text_color})
             heatmap_data.append({'year': yr, 'months': months})
 
+    # ========================================
+    # 📊 [신규] 이동평균선 데이터 (3개월, 6개월)
+    # ========================================
+    totals_list = [int(r['grand_total']) for r in rows]
+    ma_labels = [f"{r['year']}.{r['month']:02d}" for r in rows]
+
+    def calc_moving_avg(values, window):
+        result = []
+        for i in range(len(values)):
+            if i < window - 1:
+                result.append(None)
+            else:
+                result.append(int(sum(values[i - window + 1:i + 1]) / window))
+        return result
+
+    moving_avg_data = {
+        'labels': ma_labels,
+        'totals': totals_list,
+        'ma3': calc_moving_avg(totals_list, 3),
+        'ma6': calc_moving_avg(totals_list, 6)
+    }
+
+    # ========================================
+    # 🏆 [신규] 월간 Best/Worst 일 랭킹
+    # ========================================
+    best_worst_data = []
+    conn = get_db()
+    try:
+        today = korea_today()
+        # 최근 6개월 시작일 계산
+        bw_month = today.month - 6
+        bw_year = today.year
+        if bw_month <= 0:
+            bw_month += 12
+            bw_year -= 1
+        six_months_ago = f"{bw_year}-{bw_month:02d}-01"
+
+        daily_rows = conn.execute('''
+            SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
+            FROM daily_profit
+            WHERE user_id = ? AND date >= ? AND total > 0
+            ORDER BY date ASC
+        ''', (user_id, six_months_ago)).fetchall()
+
+        from collections import defaultdict
+        month_groups = defaultdict(list)
+        for dr in daily_rows:
+            ym = dr['date'][:7]
+            month_groups[ym].append(dict(dr))
+
+        for ym in sorted(month_groups.keys(), reverse=True)[:6]:
+            days = month_groups[ym]
+            if len(days) < 2:
+                continue
+            sorted_by_total = sorted(days, key=lambda x: x['total'], reverse=True)
+            best3 = sorted_by_total[:3]
+            worst3 = sorted_by_total[-3:]
+            avg_total = sum(d['total'] for d in days) // len(days)
+            best_worst_data.append({
+                'month_label': f"{ym[:4]}년 {int(ym[5:7])}월",
+                'total_days': len(days),
+                'avg_total': avg_total,
+                'best': [{'date': d['date'][5:], 'dow': d['day_of_week'], 'total': d['total']} for d in best3],
+                'worst': [{'date': d['date'][5:], 'dow': d['day_of_week'], 'total': d['total']} for d in worst3]
+            })
+    finally:
+        conn.close()
+
+    # ========================================
+    # 📅 [신규] 분기별 요약 & 분기 대비 성장
+    # ========================================
+    quarterly_data = []
+    quarter_groups = {}
+    for r in rows:
+        yr = int(r['year'])
+        m = int(r['month'])
+        q = (m - 1) // 3 + 1
+        key = (yr, q)
+        if key not in quarter_groups:
+            quarter_groups[key] = {'dpd': 0, 'nim': 0, 'total': 0, 'months': 0}
+        quarter_groups[key]['dpd'] += int(r['dispensing_plus_daily_total'] or 0)
+        quarter_groups[key]['nim'] += int(r['non_insurance_total'] or 0)
+        quarter_groups[key]['total'] += int(r['grand_total'] or 0)
+        quarter_groups[key]['months'] += 1
+
+    sorted_quarters = sorted(quarter_groups.keys())
+    for i, (yr, q) in enumerate(sorted_quarters):
+        qd = quarter_groups[(yr, q)]
+        prev_total = quarter_groups[sorted_quarters[i - 1]]['total'] if i > 0 else 0
+        growth_pct = round((qd['total'] - prev_total) / prev_total * 100, 1) if prev_total > 0 else None
+        yoy_key = (yr - 1, q)
+        yoy_total = quarter_groups.get(yoy_key, {}).get('total', 0)
+        yoy_pct = round((qd['total'] - yoy_total) / yoy_total * 100, 1) if yoy_total > 0 else None
+        quarterly_data.append({
+            'label': f"{yr}년 Q{q}",
+            'year': yr, 'quarter': q,
+            'dpd': qd['dpd'], 'nim': qd['nim'], 'total': qd['total'],
+            'months': qd['months'],
+            'monthly_avg': qd['total'] // qd['months'] if qd['months'] > 0 else 0,
+            'prev_growth_pct': growth_pct,
+            'yoy_pct': yoy_pct
+        })
+
+    quarterly_chart_data = {
+        'labels': [d['label'] for d in quarterly_data],
+        'dpd': [d['dpd'] for d in quarterly_data],
+        'nim': [d['nim'] for d in quarterly_data],
+        'totals': [d['total'] for d in quarterly_data]
+    }
+
+    # ========================================
+    # 💊 [신규] 구성 비율 트렌드 (100% 스택)
+    # ========================================
+    composition_trend = {
+        'labels': [f"{r['year']}.{r['month']:02d}" for r in rows],
+        'dpd_pct': [],
+        'nim_pct': []
+    }
+    for r in rows:
+        total = int(r['grand_total'] or 0)
+        dpd = int(r['dispensing_plus_daily_total'] or 0)
+        nim = int(r['non_insurance_total'] or 0)
+        if total > 0:
+            composition_trend['dpd_pct'].append(round(dpd / total * 100, 1))
+            composition_trend['nim_pct'].append(round(nim / total * 100, 1))
+        else:
+            composition_trend['dpd_pct'].append(0)
+            composition_trend['nim_pct'].append(0)
+
+    # ========================================
+    # 📋 [신규] 텍스트 요약 인사이트
+    # ========================================
+    insights = []
+    if rows:
+        current_year = korea_today().year
+        this_year_rows = [r for r in rows if int(r['year']) == current_year]
+        all_rows_sorted = sorted(rows, key=lambda r: int(r['grand_total']), reverse=True)
+
+        if all_rows_sorted:
+            best_r = all_rows_sorted[0]
+            worst_r = all_rows_sorted[-1]
+            insights.append(f"📈 역대 최고 순익 월은 <strong>{int(best_r['year'])}년 {int(best_r['month'])}월</strong> ({int(best_r['grand_total']):,}원)이며, 최저 월은 <strong>{int(worst_r['year'])}년 {int(worst_r['month'])}월</strong> ({int(worst_r['grand_total']):,}원)입니다.")
+
+        if this_year_rows:
+            yr_total = sum(int(r['grand_total']) for r in this_year_rows)
+            yr_avg = yr_total // len(this_year_rows)
+            best_this = max(this_year_rows, key=lambda r: int(r['grand_total']))
+            insights.append(f"📊 {current_year}년 현재까지 총 순익 <strong>{yr_total:,}원</strong>, 월 평균 <strong>{yr_avg:,}원</strong> (최고: {int(best_this['month'])}월 {int(best_this['grand_total']):,}원)")
+
+        last_year_rows = [r for r in rows if int(r['year']) == current_year - 1]
+        if this_year_rows and last_year_rows:
+            comparable_months = min(len(this_year_rows), len(last_year_rows))
+            this_comparable = sum(int(r['grand_total']) for r in this_year_rows[:comparable_months])
+            last_comparable = sum(int(r['grand_total']) for r in last_year_rows[:comparable_months])
+            if last_comparable > 0:
+                yoy_growth = round((this_comparable - last_comparable) / last_comparable * 100, 1)
+                sign = "+" if yoy_growth >= 0 else ""
+                color = "text-success" if yoy_growth >= 0 else "text-danger"
+                insights.append(f"📅 전년 동기간({comparable_months}개월) 대비 <strong class='{color}'>{sign}{yoy_growth}%</strong> {'성장' if yoy_growth >= 0 else '감소'} ({last_comparable:,}원 → {this_comparable:,}원)")
+
+        ma3 = moving_avg_data['ma3']
+        valid_ma3 = [v for v in ma3 if v is not None]
+        if len(valid_ma3) >= 3:
+            recent_3 = valid_ma3[-3:]
+            if recent_3[-1] > recent_3[0]:
+                trend_dir = "상승"
+                trend_icon = "🔺"
+            elif recent_3[-1] < recent_3[0]:
+                trend_dir = "하락"
+                trend_icon = "🔻"
+            else:
+                trend_dir = "보합"
+                trend_icon = "➡️"
+            insights.append(f"{trend_icon} 최근 3개월 이동평균 추세: <strong>{trend_dir} 구간</strong> ({valid_ma3[-3]:,}원 → {valid_ma3[-1]:,}원)")
+
+        if dow_dict:
+            best_dow = max(dow_dict, key=dow_dict.get)
+            worst_dow = min(dow_dict, key=dow_dict.get)
+            insights.append(f"📆 요일별 평균 순익: <strong>{best_dow}요일</strong>이 가장 높고 ({dow_dict[best_dow]:,}원), <strong>{worst_dow}요일</strong>이 가장 낮습니다 ({dow_dict[worst_dow]:,}원)")
+
+        if len(composition_trend['dpd_pct']) >= 6:
+            recent_dpd = sum(composition_trend['dpd_pct'][-3:]) / 3
+            past_dpd = sum(composition_trend['dpd_pct'][-6:-3]) / 3
+            diff = round(recent_dpd - past_dpd, 1)
+            if abs(diff) > 1:
+                direction = "증가" if diff > 0 else "감소"
+                insights.append(f"💊 최근 3개월 조제+일매순익 비중이 이전 3개월 대비 <strong>{abs(diff)}%p {direction}</strong>하여 ({past_dpd:.1f}% → {recent_dpd:.1f}%) 수익 구조가 변화하고 있습니다.")
+
     return render_template('trend.html',
                            yearly_data=yearly_data,
                            day_of_week_data=day_of_week_data,
                            growth_data=growth_data,
                            ratio_data=ratio_data,
-                           heatmap_data=heatmap_data)
+                           heatmap_data=heatmap_data,
+                           moving_avg_data=moving_avg_data,
+                           best_worst_data=best_worst_data,
+                           quarterly_data=quarterly_data,
+                           quarterly_chart_data=quarterly_chart_data,
+                           composition_trend=composition_trend,
+                           insights=insights)
 
 
 # ==========================================
@@ -1330,7 +1524,13 @@ def upload_excel():
                 import msoffcrypto
                 decrypted = io.BytesIO()
                 office_file = msoffcrypto.OfficeFile(io.BytesIO(file_bytes))
-                office_file.load_key(password=password or '7581')
+                try:
+                    office_file.load_key(password=password or 'dhrhd720!')
+                except Exception:
+                    if not password:
+                        office_file.load_key(password='7581')
+                    else:
+                        raise
                 office_file.decrypt(decrypted)
                 decrypted.seek(0)
                 wb = openpyxl.load_workbook(decrypted, data_only=True)

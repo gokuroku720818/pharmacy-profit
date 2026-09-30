@@ -4,7 +4,7 @@ import re
 import threading
 import time
 import weakref
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 
 try:
     import psycopg2
@@ -447,12 +447,18 @@ def init_sqlite_db():
 
     admin = cursor.execute('SELECT * FROM users WHERE username = ?', ('admin',)).fetchone()
     if not admin:
-        default_hash = generate_password_hash('7581')
+        default_hash = generate_password_hash('dhrhd720!')
         cursor.execute('''
             INSERT INTO users (username, password_hash, pharmacy_name)
             VALUES (?, ?, ?)
         ''', ('admin', default_hash, '우리약국'))
         print("기본 계정 생성 완료")
+    else:
+        curr_hash = admin['password_hash'] if isinstance(admin, sqlite3.Row) else admin[2]
+        if check_password_hash(curr_hash, '7581'):
+            new_hash = generate_password_hash('dhrhd720!')
+            cursor.execute('UPDATE users SET password_hash = ? WHERE username = ?', (new_hash, 'admin'))
+            print("admin 비밀번호 갱신 완료")
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_profit (
@@ -559,6 +565,22 @@ def init_postgres_db(db_url):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    cur.execute("SELECT password_hash FROM users WHERE username = 'admin'")
+    admin_row = cur.fetchone()
+    if not admin_row:
+        default_hash = generate_password_hash('dhrhd720!')
+        cur.execute('''
+            INSERT INTO users (username, password_hash, pharmacy_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (username) DO NOTHING
+        ''', ('admin', default_hash, '우리약국'))
+    else:
+        curr_hash = admin_row['password_hash'] if isinstance(admin_row, dict) else admin_row[0]
+        if check_password_hash(curr_hash, '7581'):
+            new_hash = generate_password_hash('dhrhd720!')
+            cur.execute("UPDATE users SET password_hash = %s WHERE username = 'admin'", (new_hash,))
+            conn.commit()
 
     # 2. daily_profit 테이블
     cur.execute('''

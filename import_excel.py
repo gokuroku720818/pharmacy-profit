@@ -179,7 +179,7 @@ def import_daily_from_weekly(wb):
 
 def main():
     excel_path = os.path.join(os.path.expanduser('~'), 'Desktop', '순익표_최종.xlsx')
-    password = '7581'
+    password = 'dhrhd720!'
 
     if not os.path.exists(excel_path):
         print(f"파일을 찾을 수 없습니다: {excel_path}")
