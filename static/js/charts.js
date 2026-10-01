@@ -347,3 +347,173 @@ function initThreeWayTrendChart(data) {
         }
     });
 }
+
+// 📊 이동평균선 차트 (순익 실적 + 3개월/6개월 이동평균)
+function initMovingAvgChart(data) {
+    const canvas = document.getElementById('movingAvgChart');
+    if (!canvas || !data) return;
+    new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: data.labels,
+            datasets: [{
+                label: '월 순익',
+                data: data.totals,
+                borderColor: 'rgba(200, 210, 230, 0.6)',
+                backgroundColor: 'rgba(200, 210, 230, 0.08)',
+                fill: true,
+                tension: 0.2,
+                pointRadius: 2,
+                pointHoverRadius: 5,
+                borderWidth: 1.5,
+                order: 3
+            }, {
+                label: '3개월 이동평균',
+                data: data.ma3,
+                borderColor: 'rgba(220, 53, 69, 1)',
+                backgroundColor: 'transparent',
+                borderWidth: 2.5,
+                tension: 0.4,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                spanGaps: false,
+                order: 2
+            }, {
+                label: '6개월 이동평균',
+                data: data.ma6,
+                borderColor: 'rgba(13, 110, 253, 1)',
+                backgroundColor: 'transparent',
+                borderWidth: 2.5,
+                tension: 0.4,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                spanGaps: false,
+                order: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            if (ctx.raw === null) return null;
+                            return `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}원`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: { ticks: { callback: v => formatNumber(v) } }
+            }
+        }
+    });
+}
+
+// 💊 구성 비율 트렌드 (100% 스택 영역 차트)
+function initCompositionTrendChart(data) {
+    const canvas = document.getElementById('compositionTrendChart');
+    if (!canvas || !data) return;
+    new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: data.labels,
+            datasets: [{
+                label: '조제+일매순익 비중 (%)',
+                data: data.dpd_pct,
+                borderColor: COLORS.primary,
+                backgroundColor: COLORS.primaryLight,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+                pointHoverRadius: 5
+            }, {
+                label: '비보험마진 비중 (%)',
+                data: data.nim_pct,
+                borderColor: COLORS.warning,
+                backgroundColor: 'rgba(255, 193, 7, 0.2)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+                pointHoverRadius: 5
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            return `${ctx.dataset.label}: ${ctx.raw}%`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    stacked: true,
+                    max: 100,
+                    ticks: { callback: v => v + '%' }
+                },
+                x: { stacked: true }
+            }
+        }
+    });
+}
+
+// 📅 분기별 순익 차트 (누적 막대)
+function initQuarterlyChart(data) {
+    const canvas = document.getElementById('quarterlyChart');
+    if (!canvas || !data) return;
+    new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: data.labels,
+            datasets: [{
+                label: '조제+일매순익',
+                data: data.dpd,
+                backgroundColor: COLORS.primaryLight,
+                borderColor: COLORS.primary,
+                borderWidth: 1,
+                borderRadius: 3
+            }, {
+                label: '비보험마진',
+                data: data.nim,
+                backgroundColor: 'rgba(255, 193, 7, 0.25)',
+                borderColor: COLORS.warning,
+                borderWidth: 1,
+                borderRadius: 3
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            return `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}원`;
+                        },
+                        footer: function(tooltipItems) {
+                            let total = 0;
+                            tooltipItems.forEach(item => { total += item.raw; });
+                            return `분기 총 순익: ${total.toLocaleString()}원`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { stacked: true },
+                y: {
+                    stacked: true,
+                    ticks: { callback: v => formatNumber(v) }
+                }
+            }
+        }
+    });
+}
