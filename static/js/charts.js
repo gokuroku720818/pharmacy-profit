@@ -348,26 +348,47 @@ function initThreeWayTrendChart(data) {
     });
 }
 
-// 📊 이동평균선 차트 (순익 실적 + 3개월/6개월 이동평균)
+// 📊 이동평균선 차트 (실측 + 환산 예상 + 3/6개월 이동평균)
 function initMovingAvgChart(data) {
     const canvas = document.getElementById('movingAvgChart');
     if (!canvas || !data) return;
+
+    // 환산된 달 감지 (실측과 환산이 다른 달)
+    const barColors = data.totals.map((v, i) =>
+        v !== data.normalized[i] ? 'rgba(255, 193, 7, 0.5)' : 'rgba(13, 110, 253, 0.25)'
+    );
+    const barBorders = data.totals.map((v, i) =>
+        v !== data.normalized[i] ? 'rgba(255, 193, 7, 1)' : 'rgba(13, 110, 253, 0.5)'
+    );
+
     new Chart(canvas, {
-        type: 'line',
+        type: 'bar',
         data: {
             labels: data.labels,
             datasets: [{
-                label: '월 순익',
+                type: 'bar',
+                label: '월 순익 (실측)',
                 data: data.totals,
-                borderColor: 'rgba(200, 210, 230, 0.6)',
-                backgroundColor: 'rgba(200, 210, 230, 0.08)',
-                fill: true,
-                tension: 0.2,
-                pointRadius: 2,
-                pointHoverRadius: 5,
-                borderWidth: 1.5,
+                backgroundColor: barColors,
+                borderColor: barBorders,
+                borderWidth: 1,
+                borderRadius: 3,
+                order: 4
+            }, {
+                type: 'line',
+                label: '월 환산 예상',
+                data: data.normalized.map((v, i) => v !== data.totals[i] ? v : null),
+                borderColor: 'rgba(255, 193, 7, 1)',
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                borderDash: [6, 3],
+                pointRadius: 5,
+                pointStyle: 'triangle',
+                pointBackgroundColor: 'rgba(255, 193, 7, 1)',
+                spanGaps: false,
                 order: 3
             }, {
+                type: 'line',
                 label: '3개월 이동평균',
                 data: data.ma3,
                 borderColor: 'rgba(220, 53, 69, 1)',
@@ -379,6 +400,7 @@ function initMovingAvgChart(data) {
                 spanGaps: false,
                 order: 2
             }, {
+                type: 'line',
                 label: '6개월 이동평균',
                 data: data.ma6,
                 borderColor: 'rgba(13, 110, 253, 1)',
@@ -400,13 +422,16 @@ function initMovingAvgChart(data) {
                     callbacks: {
                         label: function(ctx) {
                             if (ctx.raw === null) return null;
-                            return `${ctx.dataset.label}: ${ctx.raw.toLocaleString()}원`;
+                            return ctx.dataset.label + ': ' + ctx.raw.toLocaleString() + '원';
                         }
                     }
                 }
             },
             scales: {
-                y: { ticks: { callback: v => formatNumber(v) } }
+                y: {
+                    beginAtZero: false,
+                    ticks: { callback: v => formatNumber(v) }
+                }
             }
         }
     });

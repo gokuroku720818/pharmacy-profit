@@ -1157,9 +1157,42 @@ def trend():
 
     # ========================================
     # 📊 [신규] 이동평균선 데이터 (3개월, 6개월)
+    # 입력 일수 적은 달은 영업일 기준 월간 환산
     # ========================================
     totals_list = [int(r['grand_total']) for r in rows]
     ma_labels = [f"{r['year']}.{r['month']:02d}" for r in rows]
+
+    # 월별 입력 일수 조회 (DB 1회)
+    conn_ma = get_db()
+    try:
+        entered_days_rows = conn_ma.execute('''
+            SELECT substr(date, 1, 7) as ym, COUNT(*) as cnt
+            FROM daily_profit
+            WHERE user_id = ? AND total > 0
+            GROUP BY substr(date, 1, 7)
+        ''', (user_id,)).fetchall()
+        entered_days_map = {r['ym']: int(r['cnt']) for r in entered_days_rows}
+    finally:
+        conn_ma.close()
+
+    # 월간 평균 영업일수 계산 (전체 기간 중 15일 이상 입력된 달들의 평균)
+    full_month_days = [v for v in entered_days_map.values() if v >= 15]
+    avg_working_days = int(sum(full_month_days) / len(full_month_days)) if full_month_days else 25
+
+    # 환산된 순익 (normalized): 입력일수가 평균영업일의 60% 미만이면 환산
+    normalized_totals = []
+    normalize_threshold = avg_working_days * 0.6
+    for i, r in enumerate(rows):
+        ym = f"{int(r['year'])}-{int(r['month']):02d}"
+        total = int(r['grand_total'])
+        entered = entered_days_map.get(ym, 0)
+
+        if entered > 0 and entered < normalize_threshold and total > 0:
+            # 일평균 × 평균영업일 = 월간 환산 예상치
+            projected = int(total / entered * avg_working_days)
+            normalized_totals.append(projected)
+        else:
+            normalized_totals.append(total)
 
     def calc_moving_avg(values, window):
         result = []
@@ -1173,8 +1206,10 @@ def trend():
     moving_avg_data = {
         'labels': ma_labels,
         'totals': totals_list,
-        'ma3': calc_moving_avg(totals_list, 3),
-        'ma6': calc_moving_avg(totals_list, 6)
+        'normalized': normalized_totals,
+        'ma3': calc_moving_avg(normalized_totals, 3),
+        'ma6': calc_moving_avg(normalized_totals, 6),
+        'avg_working_days': avg_working_days
     }
 
     # ========================================

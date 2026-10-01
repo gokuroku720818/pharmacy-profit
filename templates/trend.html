@@ -25,9 +25,12 @@
 <div class="row mb-4">
     <div class="col-md-12">
         <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                 <span><i class="fas fa-wave-square"></i> 순익 추세 & 이동평균선</span>
-                <span class="badge bg-light text-dark border">3개월·6개월 이동평균으로 노이즈 제거</span>
+                <div class="d-flex gap-2 flex-wrap">
+                    <span class="badge bg-light text-dark border">입력일 부족한 달은 영업일 기준 월간 환산</span>
+                    <span class="badge bg-light text-dark border">평균 영업일: {{ moving_avg_data.avg_working_days }}일</span>
+                </div>
             </div>
             <div class="card-body"><canvas id="movingAvgChart" height="280"></canvas></div>
         </div>
