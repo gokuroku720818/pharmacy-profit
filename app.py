@@ -171,6 +171,83 @@ def get_cached_calculator_settings(conn=None, user_id=None):
             conn.close()
 
 
+def get_cached_trend_extra(conn=None, user_id=None):
+    """트렌드 분석용 월별 입력일수 및 최근 6개월 Best/Worst 랭킹 캐시 (캐시 히트 시 DB 0ms 반환)"""
+    now = time.time()
+    with _CACHE_LOCK:
+        if user_id in _USER_CACHE:
+            entry = _USER_CACHE[user_id].get('trend_extra')
+            if entry and (now - entry['ts'] < _CACHE_TTL):
+                return entry['data']
+
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        # 1. 월별 입력 일수 집계
+        entered_days_rows = conn.execute('''
+            SELECT substr(date, 1, 7) as ym, COUNT(*) as cnt
+            FROM daily_profit
+            WHERE user_id = ? AND total > 0
+            GROUP BY substr(date, 1, 7)
+        ''', (user_id,)).fetchall()
+        entered_days_map = {r['ym']: int(r['cnt']) for r in entered_days_rows}
+
+        # 2. 최근 6개월 Best/Worst Top 3
+        today = korea_today()
+        bw_month = today.month - 6
+        bw_year = today.year
+        if bw_month <= 0:
+            bw_month += 12
+            bw_year -= 1
+        six_months_ago = f"{bw_year}-{bw_month:02d}-01"
+
+        daily_rows = conn.execute('''
+            SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
+            FROM daily_profit
+            WHERE user_id = ? AND date >= ? AND total > 0
+            ORDER BY date ASC
+        ''', (user_id, six_months_ago)).fetchall()
+
+        from collections import defaultdict
+        month_groups = defaultdict(list)
+        for dr in daily_rows:
+            ym = dr['date'][:7]
+            month_groups[ym].append(dict(dr))
+
+        best_worst_data = []
+        for ym in sorted(month_groups.keys(), reverse=True)[:6]:
+            days = month_groups[ym]
+            if len(days) < 2:
+                continue
+            sorted_by_total = sorted(days, key=lambda x: x['total'], reverse=True)
+            best3 = sorted_by_total[:3]
+            worst3 = sorted_by_total[-3:]
+            avg_total = sum(d['total'] for d in days) // len(days)
+            best_worst_data.append({
+                'month_label': f"{ym[:4]}년 {int(ym[5:7])}월",
+                'total_days': len(days),
+                'avg_total': avg_total,
+                'best': [{'date': d['date'][5:], 'dow': d['day_of_week'], 'total': d['total']} for d in best3],
+                'worst': [{'date': d['date'][5:], 'dow': d['day_of_week'], 'total': d['total']} for d in worst3]
+            })
+
+        data = {
+            'entered_days_map': entered_days_map,
+            'best_worst_data': best_worst_data
+        }
+
+        with _CACHE_LOCK:
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['trend_extra'] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
+
+
 def get_cached_admin_stats():
     """관리자 콘솔 회원 목록 및 통계 캐시 (캐시 히트 시 DB 연결/쿼리 0회, 0ms 즉시 반환)"""
     now = time.time()
@@ -251,6 +328,7 @@ def warm_up_cache(user_id=1):
                     get_cached_current_month_dailies(conn, user_id, now.year, now.month)
                     get_cached_dow_avg(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
+                    get_cached_trend_extra(conn, user_id)
                 finally:
                     conn.close()
         except Exception:
@@ -1157,23 +1235,15 @@ def trend():
 
     # ========================================
     # 📊 [신규] 이동평균선 데이터 (3개월, 6개월)
-    # 입력 일수 적은 달은 영업일 기준 월간 환산
+    # 입력 일수 적은 달은 영업일 기준 월간 환산 (캐시 히트 시 DB 0ms)
     # ========================================
     totals_list = [int(r['grand_total']) for r in rows]
     ma_labels = [f"{r['year']}.{r['month']:02d}" for r in rows]
 
-    # 월별 입력 일수 조회 (DB 1회)
-    conn_ma = get_db()
-    try:
-        entered_days_rows = conn_ma.execute('''
-            SELECT substr(date, 1, 7) as ym, COUNT(*) as cnt
-            FROM daily_profit
-            WHERE user_id = ? AND total > 0
-            GROUP BY substr(date, 1, 7)
-        ''', (user_id,)).fetchall()
-        entered_days_map = {r['ym']: int(r['cnt']) for r in entered_days_rows}
-    finally:
-        conn_ma.close()
+    # [스마트 캐시] 월별 입력 일수 및 최근 6개월 Best/Worst 랭킹 조회
+    trend_extra = get_cached_trend_extra(None, user_id)
+    entered_days_map = trend_extra.get('entered_days_map', {})
+    best_worst_data = trend_extra.get('best_worst_data', [])
 
     # 월간 평균 영업일수 계산 (전체 기간 중 15일 이상 입력된 달들의 평균)
     full_month_days = [v for v in entered_days_map.values() if v >= 15]
@@ -1211,52 +1281,6 @@ def trend():
         'ma6': calc_moving_avg(normalized_totals, 6),
         'avg_working_days': avg_working_days
     }
-
-    # ========================================
-    # 🏆 [신규] 월간 Best/Worst 일 랭킹
-    # ========================================
-    best_worst_data = []
-    conn = get_db()
-    try:
-        today = korea_today()
-        # 최근 6개월 시작일 계산
-        bw_month = today.month - 6
-        bw_year = today.year
-        if bw_month <= 0:
-            bw_month += 12
-            bw_year -= 1
-        six_months_ago = f"{bw_year}-{bw_month:02d}-01"
-
-        daily_rows = conn.execute('''
-            SELECT date, day_of_week, dispensing_fee, daily_net_profit, non_insurance_margin, total
-            FROM daily_profit
-            WHERE user_id = ? AND date >= ? AND total > 0
-            ORDER BY date ASC
-        ''', (user_id, six_months_ago)).fetchall()
-
-        from collections import defaultdict
-        month_groups = defaultdict(list)
-        for dr in daily_rows:
-            ym = dr['date'][:7]
-            month_groups[ym].append(dict(dr))
-
-        for ym in sorted(month_groups.keys(), reverse=True)[:6]:
-            days = month_groups[ym]
-            if len(days) < 2:
-                continue
-            sorted_by_total = sorted(days, key=lambda x: x['total'], reverse=True)
-            best3 = sorted_by_total[:3]
-            worst3 = sorted_by_total[-3:]
-            avg_total = sum(d['total'] for d in days) // len(days)
-            best_worst_data.append({
-                'month_label': f"{ym[:4]}년 {int(ym[5:7])}월",
-                'total_days': len(days),
-                'avg_total': avg_total,
-                'best': [{'date': d['date'][5:], 'dow': d['day_of_week'], 'total': d['total']} for d in best3],
-                'worst': [{'date': d['date'][5:], 'dow': d['day_of_week'], 'total': d['total']} for d in worst3]
-            })
-    finally:
-        conn.close()
 
     # ========================================
     # 📅 [신규] 분기별 요약 & 분기 대비 성장

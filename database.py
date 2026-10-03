@@ -30,9 +30,13 @@ def get_pg_pool():
                 db_url = get_database_url()
                 if db_url:
                     try:
-                        _pg_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=db_url, cursor_factory=RealDictCursor, connect_timeout=10)
+                        _pg_pool = ThreadedConnectionPool(
+                            minconn=1, maxconn=10, dsn=db_url,
+                            cursor_factory=RealDictCursor, connect_timeout=10,
+                            keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3
+                        )
                         _pool_error = None
-                        print("⚡ PostgreSQL 커넥션 풀 활성화 완료 (고속 재사용 모드)")
+                        print("⚡ PostgreSQL 커넥션 풀 활성화 완료 (고속 재사용 모드 + TCP KeepAlive)")
                     except Exception as e:
                         _pool_error = str(e)
                         print(f"커넥션 풀 생성 실패: {e}")
@@ -86,7 +90,10 @@ class PostgresConnectionWrapper:
             except Exception:
                 pass
         if db_url and psycopg2:
-            self.conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor, connect_timeout=10)
+            self.conn = psycopg2.connect(
+                db_url, cursor_factory=RealDictCursor, connect_timeout=10,
+                keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3
+            )
             self.from_pool = False
             self._closed = False
 
@@ -541,6 +548,7 @@ def init_sqlite_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date ON daily_profit(user_id, date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_date_desc ON daily_profit(user_id, date DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_dow ON daily_profit(user_id, total, day_of_week)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_user_total_date ON daily_profit(user_id, total, date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_ym ON monthly_summary(user_id, year, month)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_monthly_user_gt ON monthly_summary(user_id, grand_total)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_calc_user ON user_calculator_settings(user_id)')
@@ -660,6 +668,7 @@ def init_postgres_db(db_url):
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_date ON daily_profit(user_id, date)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_date_desc ON daily_profit(user_id, date DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_dow ON daily_profit(user_id, total, day_of_week)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_daily_user_total_date ON daily_profit(user_id, total, date)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_ym ON monthly_summary(user_id, year, month)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_monthly_user_gt ON monthly_summary(user_id, grand_total)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_pg_calc_user ON user_calculator_settings(user_id)')
