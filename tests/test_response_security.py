@@ -61,3 +61,13 @@ def test_static_assets_keep_caching_and_security_hook_is_idempotent(tmp_path):
     assert 'max-age=86400' in response.headers.get('Cache-Control', '')
     assert response.headers['X-Content-Type-Options'] == 'nosniff'
     assert response.headers['X-Frame-Options'] == 'DENY'
+
+
+def test_revision_header_exposes_only_valid_deployed_commit(tmp_path, monkeypatch):
+    app = _app(tmp_path)
+    import_module('response_security').install(app)
+    client = app.test_client()
+    monkeypatch.setenv('RENDER_GIT_COMMIT', 'a' * 40)
+    assert client.get('/login').headers['X-App-Revision'] == 'a' * 40
+    monkeypatch.setenv('RENDER_GIT_COMMIT', 'invalid-value')
+    assert 'X-App-Revision' not in client.get('/login').headers

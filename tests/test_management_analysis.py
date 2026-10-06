@@ -130,8 +130,8 @@ def test_dashboard_shows_same_period_miscellaneous_and_reuses_existing_queries(s
     assert 'data-current-total="250"' in html
     assert 'data-current-base="200"' in html
     assert 'data-period-diff="120"' in html
-    assert len(statements) == 3, statements
-    assert sum('FROM extra_profit' in sql for sql in statements) == 1
+    assert len(statements) == 1, statements  # validate fresh daily source only
+    assert 'FROM daily_profit' in statements[0]
     # Existing invalidation must also refresh the new, read-only figures.
     conn.execute("UPDATE daily_profit SET dispensing_fee=300,dispensing_plus_daily=300,total=300 WHERE user_id=1 AND date='2026-09-01'")
     conn.commit()

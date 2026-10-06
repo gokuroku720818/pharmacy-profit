@@ -35,6 +35,7 @@ ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', '0') == '1'
 _USER_CACHE = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_TTL = 3600  # 1시간 유효 (데이터 변경 시 invalidate_user_cache 즉시 호출로 실시간 정합성 보장)
+_DASHBOARD_CACHE_TTL = 60  # 분석 결과만 짧게 재사용; 저장·한국 날짜 변경 시 즉시 재계산
 
 
 def get_cached_monthly_summary(conn=None, user_id=None):
@@ -692,9 +693,26 @@ def logout():
 def dashboard():
     user_id = session['user_id']
 
+    # Cache data, never HTML/session/flash messages. Production cache_coherence
+    # holds the user's RLock across this view and invalidation after every write.
+    today = korea_today().isoformat()
+    with _CACHE_LOCK:
+        entry = _USER_CACHE.get(user_id, {}).get('dashboard_context')
+        if not (entry and entry['day'] == today
+                and time.monotonic() - entry['ts'] < _DASHBOARD_CACHE_TTL):
+            entry = None
+
     now = time.time()
     conn = get_db()
     try:
+        # Preserve direct daily corrections, even outside application writes.
+        # One indexed read validates reuse; schedules/misc refresh on writes/TTL.
+        validated_rows = None
+        if entry:
+            month = entry['data']['current_month']
+            validated_rows = load_analysis_rows(conn, user_id, month['year'], month['month'])
+            if validated_rows == entry['source_rows']:
+                return render_template('dashboard.html', **entry['data'])
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
         rows = get_cached_monthly_summary(conn, user_id)
 
@@ -740,7 +758,8 @@ def dashboard():
         # [초고속 스마트 캐시 2] 당월 daily_profit 데이터 캐시 조회 (캐시 히트 시 DB 0ms)
         cur_year = current_month['year']
         cur_month = current_month['month']
-        analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
+        analysis_rows = (validated_rows if validated_rows is not None
+                         else load_analysis_rows(conn, user_id, cur_year, cur_month))
         cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
         schedule = get_business_schedule(conn, user_id)
 
@@ -807,6 +826,13 @@ def dashboard():
             if user_id not in _USER_CACHE:
                 _USER_CACHE[user_id] = {}
             _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
+            if comparison_rows is not None:
+                _USER_CACHE[user_id]['dashboard_context'] = {
+                    'day': today, 'ts': time.monotonic(), 'data': dashboard_ctx,
+                    'source_rows': analysis_rows}
+            else:
+                # Older fallback rows are outside the validation range.
+                _USER_CACHE[user_id].pop('dashboard_context', None)
     finally:
         conn.close()
 
