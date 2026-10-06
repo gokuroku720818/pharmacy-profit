@@ -113,7 +113,8 @@ def install(module):
         writer = csv.writer(output)
         writer.writerow([f'[{pharmacy}] {year}년 순익 리포트 - 일장부 자동 합계'])
         writer.writerow(['연도', '월', '조제료', '일매순익', '비보험마진', '잡이익',
-                         '전체합계', '전월대비', '일별 합계 차이', '세부자료 상태'])
+                         '전체합계', '전월대비', '일별 합계 차이', '세부자료 상태',
+                         '입력일수', '잡이익 제외 합계', '집계 기준'])
         for r in rows:
             discrepancy = int(r['daily_total_difference'])
             status = ('잡이익만 입력됨' if not r['source_day_count'] else
@@ -122,7 +123,8 @@ def install(module):
                              r['daily_net_profit'], r['non_insurance_total'],
                              r['extra_profit_total'], r['grand_total'],
                              r['prev_month_diff'] if r['prev_month_diff'] is not None else '',
-                             discrepancy, status])
+                             discrepancy, status, r['source_day_count'], r['daily_total'],
+                             '일별 total 합계 + 잡이익 / 저장된 월 전체 / 세무 신고 소득과 별도'])
         output.seek(0)
         return send_file(io.BytesIO(output.getvalue().encode('utf-8-sig')),
                          mimetype='text/csv', as_attachment=True,
