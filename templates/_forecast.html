@@ -2,7 +2,7 @@
   <div class="card-body p-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
       <div><h5 class="fw-bold mb-1">{{ forecast.year }}년 {{ forecast.month }}월 · {{ '입력 실적' if forecast.is_past else '월말 예상' }}</h5>
-        <small class="text-muted">한국시간 {{ forecast.as_of }} 기준 · 최근 8주 동요일 실적</small></div>
+        <small class="text-muted">한국시간 {{ forecast.as_of }} 기준 · 최근 8주 동요일 실적 · 총 표본 {{ forecast.sample_count }}일</small></div>
       <a class="btn btn-sm btn-outline-primary" href="{{ url_for('calendar_view', year=forecast.year, month=forecast.month) }}#businessSchedule">영업일·휴무 설정</a>
     </div>
     {% if forecast.forecast_total is not none %}

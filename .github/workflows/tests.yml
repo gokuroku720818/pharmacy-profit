@@ -1,0 +1,62 @@
+name: Regression tests
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: regression
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: regression
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI_DATABASE_URL: postgresql://regression:disposable-ci-only@127.0.0.1:5432/regression
+      PYTEST_CURRENT_TEST: ci-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m pytest -q
+      - run: node --test tests/management_goal.test.cjs
+      - name: Isolated production startup smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox_dir=$(mktemp -d)
+          git ls-files -z '*.py' '*.html' '*.js' '*.css' '*.json' '*.svg' '*.png' '*.ico' | tar --null -T - -cf - | tar -xf - -C "$sandbox_dir"
+          cd "$sandbox_dir"
+          unset DATABASE_URL
+          export SECRET_KEY=synthetic-ci-session-key
+          gunicorn -c gunicorn.conf.py -b 127.0.0.1:8765 app:app > gunicorn-smoke.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; cat gunicorn-smoke.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8765/health > health.txt; then
+              test "$(cat health.txt)" = ok
+              curl --fail --silent http://127.0.0.1:8765/login > /dev/null
+              exit 0
+            fi
+            kill -0 "$server_pid"
+            sleep 1
+          done
+          exit 1

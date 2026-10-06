@@ -5,6 +5,9 @@ client/proxy caching of dynamic pages and exports is disabled; versioned/static
 assets keep the application's existing browser cache policy.
 """
 
+import os
+import re
+
 from flask import request
 
 
@@ -18,6 +21,9 @@ def install(app):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'no-referrer'
+        revision = os.environ.get('RENDER_GIT_COMMIT', '')
+        if re.fullmatch(r'[0-9a-f]{40}', revision):
+            response.headers['X-App-Revision'] = revision
         if not request.path.startswith('/static/'):
             # Override cache headers set by send_file and other endpoints.
             # This covers login, private pages, redirects, errors, and exports.

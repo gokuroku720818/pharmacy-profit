@@ -1,0 +1,78 @@
+{% set review = management_review %}
+{% set cur = review.current %}
+{% set prev = review.previous %}
+<section class="card border-0 shadow-sm mb-4" id="managementReview"
+         data-current-total="{{ cur.total }}" data-current-base="{{ cur.daily_total }}"
+         data-period-diff="{{ review.total_diff }}">
+  <div class="card-body p-4">
+    <h5 class="fw-bold mb-1">경영 판단 · {{ review.year }}년 {{ review.month }}월</h5>
+    {% if cur.end < cur.start %}<p class="small text-muted mb-3">선택한 달은 아직 시작되지 않았습니다. 미래 입력 금액은 실적에서 제외합니다.</p>
+    {% else %}<p class="small text-muted mb-3">{{ cur.start }}~{{ cur.end }} 입력 기록 기준. 운영비·세금 차감 여부는 원래 입력 금액의 정의를 따르며, 세무 신고 소득이나 통장 잔액을 뜻하지 않습니다.</p>{% endif %}
+    <div class="row g-3 mb-3">
+      <div class="col-sm-4"><div class="small text-muted">전체 합계 · 잡이익 포함</div><strong class="fs-5">{{ '{:,}'.format(cur.total) }}원</strong></div>
+      <div class="col-sm-4"><div class="small text-muted">잡이익 제외 합계 · 일별 total 기준</div><strong class="fs-5">{{ '{:,}'.format(cur.daily_total) }}원</strong></div>
+      <div class="col-sm-4"><div class="small text-muted">별도 입력 잡이익</div><strong class="fs-5">{{ '{:,}'.format(cur.extra_total) }}원</strong></div>
+    </div>
+    <p class="small text-muted">잡이익을 모두 일회성으로 판단하지 않습니다. 반복 수익 여부가 구분되지 않아 포함·제외 실적을 함께 표시합니다.</p>
+
+    <div class="border-top pt-3 mb-3">
+      <h6 class="fw-bold">수익 변화의 원인 분해</h6>
+      {% if review.has_comparison %}
+        <p class="small mb-2">전월 {{ prev.start }}~{{ prev.end }} 입력 실적 대비 전체 합계 <strong>{{ '{:+,}'.format(review.total_diff) }}원</strong></p>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-2">
+          <thead><tr><th scope="col">항목</th><th scope="col" class="text-end">전월 비교 기간</th><th scope="col" class="text-end">이번 비교 기간</th><th scope="col" class="text-end">증감</th></tr></thead>
+          <tbody>{% for item in review.components %}<tr><th scope="row" class="fw-normal">{{ item.label }}</th><td class="text-end">{{ '{:,}'.format(item.previous) }}원</td><td class="text-end">{{ '{:,}'.format(item.current) }}원</td><td class="text-end fw-bold">{{ '{:+,}'.format(item.diff) }}원</td></tr>{% endfor %}
+          {% if cur.discrepancy_days or prev.discrepancy_days %}<tr><th scope="row" class="fw-normal">일별 total-세 항목 차이</th><td class="text-end">{{ '{:+,}'.format(prev.discrepancy) }}원</td><td class="text-end">{{ '{:+,}'.format(cur.discrepancy) }}원</td><td class="text-end">{{ '{:+,}'.format(review.discrepancy_diff) }}원</td></tr>{% endif %}
+          </tbody>
+        </table></div>
+        <small class="text-muted">입력된 금액의 산술적 증감입니다. 처방 건수·건당 조제료 변화 등 실제 원인을 확정하지 않습니다.</small>
+      {% else %}<p class="small text-muted mb-0">전월 또는 이번 비교 기간의 입력 자료가 없어 증감 비교를 표시하지 않습니다.</p>{% endif %}
+    </div>
+
+    <div class="border-top pt-3 mb-3">
+      <h6 class="fw-bold">영업일수와 하루 실적의 영향 · 잡이익 제외</h6>
+      {% if review.day_effects %}
+        {% set effects = review.day_effects %}
+        <p class="small mb-2">영업 기록 {{ effects.previous_days }}일 → {{ effects.current_days }}일 · 하루 평균 {{ '{:,}'.format(effects.previous_average) }}원 → {{ '{:,}'.format(effects.current_average) }}원</p>
+        <div class="row g-2 small">
+          <div class="col-sm-6">영업일수 차이 효과 <strong>{{ '{:+,}'.format(effects.days_effect) }}원</strong></div>
+          <div class="col-sm-6">하루 평균 차이 효과 <strong>{{ '{:+,}'.format(effects.average_effect) }}원</strong></div>
+        </div>
+        <details class="small text-muted mt-2"><summary>계산 기준</summary>영업일수 효과 = 전월 하루 평균 × 영업일수 차이. 하루 평균 효과 = 잡이익 제외 합계 증감 − 영업일수 효과. 원 단위 반올림이며, 두 효과의 합은 {{ '{:+,}'.format(effects.daily_total_diff) }}원입니다. 요일 구성·휴일·영업시간 차이는 남아 있어 인과관계를 뜻하지 않습니다.</details>
+      {% else %}<p class="small text-muted mb-0">두 기간의 영업 기록이 모두 완성되고, 휴무 설정 및 일별 합계가 일치할 때만 계산합니다.</p>{% endif %}
+    </div>
+
+    <div class="border-top pt-3 mb-3">
+      <h6 class="fw-bold">분석 근거 · {{ review.as_of }} 한국시간 기준</h6>
+      <div class="small">이번 비교 기간: 지정 영업일 {{ cur.expected_days }}일 중 {{ cur.entered_business_days }}일 입력 · 과거 미입력 {{ cur.missing_dates|length }}일{% if cur.awaiting_today %} · 오늘 마감 입력 대기{% endif %}</div>
+      <div class="small text-muted">전월 비교 기간: 지정 영업일 {{ prev.expected_days }}일 중 {{ prev.entered_business_days }}일 입력 · 미입력 {{ prev.missing_dates|length }}일</div>
+      {% if cur.missing_dates or prev.missing_dates %}
+        <details class="small text-muted mt-2"><summary>비교 기간 미입력 날짜</summary>
+          {% if cur.missing_dates %}<div>이번 기간: {{ cur.missing_dates|join(', ') }}</div>{% endif %}
+          {% if prev.missing_dates %}<div>전월 기간: {{ prev.missing_dates|join(', ') }}</div>{% endif %}
+        </details>
+      {% endif %}
+      {% if cur.outside_schedule_count or prev.outside_schedule_count %}<p class="small text-warning mt-2 mb-0">휴무 설정과 다른 날짜에 이번 기간 {{ cur.outside_schedule_count }}일, 전월 기간 {{ prev.outside_schedule_count }}일의 기록이 있습니다. 금액은 포함하지만 영업일수 효과 계산은 보류합니다.</p>{% endif %}
+      {% if cur.discrepancy_days or prev.discrepancy_days %}<p class="small text-warning mt-2 mb-0">일별 total과 세 항목 합계가 다른 기록: 이번 기간 {{ cur.discrepancy_days }}일 / 전월 기간 {{ prev.discrepancy_days }}일. 차액은 잡이익으로 편입하지 않습니다.</p>{% endif %}
+      {% if review.future_entry_count %}<p class="small text-muted mt-2 mb-0">미래 날짜의 일별 입력 {{ review.future_entry_count }}일은 제외했습니다. 잡이익도 각 비교 기간 안의 기록만 포함합니다.</p>{% endif %}
+      <small class="text-muted d-block mt-2">0원 입력은 기록으로 포함합니다. 영업일수는 현재 휴무 설정 기준이며, 당시 영업 일정과 다르면 설정을 확인해 주세요.</small>
+    </div>
+
+    {% if review.can_set_goal %}
+    <div class="border-top pt-3" id="managementGoal"
+         data-total="{{ cur.total }}" data-base="{{ cur.daily_total }}"
+         data-days="{{ review.remaining_business_days }}" data-ready="{{ '1' if review.target_ready else '0' }}"
+         data-storage-key="management-goal:{{ session.user_id }}:{{ review.year }}-{{ '%02d'|format(review.month) }}">
+      <h6 class="fw-bold">목표까지 필요한 영업일당 수익</h6>
+      <div class="row g-2 align-items-end">
+        <div class="col-sm-5"><label class="form-label small" for="managementGoalAmount">이번 달 목표 · 원</label><input class="form-control" id="managementGoalAmount" type="text" inputmode="numeric" autocomplete="off" placeholder="예: 20000000" maxlength="17"></div>
+        <div class="col-sm-4"><label class="form-label small" for="managementGoalBasis">목표 기준</label><select class="form-select" id="managementGoalBasis"><option value="base">잡이익 제외 합계</option><option value="total">전체 합계 · 잡이익 포함</option></select></div>
+        <div class="col-sm-3 small text-muted pb-2">남은 예정 영업일 {{ review.remaining_business_days }}일<br>오늘 미입력 영업일 포함</div>
+      </div>
+      <p class="small mt-2 mb-1" id="managementGoalResult" aria-live="polite">목표를 입력하면 필요한 하루 평균을 계산합니다.</p>
+      <small class="text-muted">이 브라우저에 목표만 저장합니다. 세액·현금흐름 계산이나 달성 가능성 예측은 아닙니다.</small>
+      <noscript><p class="small text-muted mt-2">목표 계산에는 JavaScript가 필요합니다.</p></noscript>
+    </div>
+    {% endif %}
+  </div>
+</section>

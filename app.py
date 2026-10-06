@@ -35,6 +35,7 @@ ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', '0') == '1'
 _USER_CACHE = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_TTL = 3600  # 1시간 유효 (데이터 변경 시 invalidate_user_cache 즉시 호출로 실시간 정합성 보장)
+_DASHBOARD_CACHE_TTL = 60  # 분석 결과만 짧게 재사용; 저장·한국 날짜 변경 시 즉시 재계산
 
 
 def get_cached_monthly_summary(conn=None, user_id=None):
@@ -420,7 +421,7 @@ def load_analysis_rows(conn, user_id, year, month):
     ).fetchall()]
 
 
-def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
+def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None, extra_range=None):
     """
     최근 4주간 주차별 순익 현황 및 이번 주 이익 집계 (x월 1~4주차)
     - 한국 표준 목요일 기준 x월 n주차 명칭 자동 산출
@@ -443,10 +444,20 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
         ''', (user_id, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))).fetchall()
 
     date_map = {r['date']: r for r in rows}
-    extra_map = {r['date']: int(r['amount'] or 0) for r in conn.execute('''
+    # 경영 판단과 같은 날짜별 잡이익 조회를 공유한다. 추가 쿼리는 만들지 않는다.
+    extra_sql = '''
         SELECT date, SUM(amount) AS amount FROM extra_profit
         WHERE user_id = ? AND date BETWEEN ? AND ? GROUP BY date
-    ''', (user_id, start_date.isoformat(), end_date.isoformat())).fetchall()}
+    '''
+    extra_start, extra_end = start_date, end_date
+    if extra_range and extra_range[0] <= end_date and extra_range[1] >= start_date:
+        extra_start, extra_end = min(start_date, extra_range[0]), max(end_date, extra_range[1])
+    extra_params = [user_id, extra_start.isoformat(), extra_end.isoformat()]
+    if extra_range and (extra_range[1] < start_date or extra_range[0] > end_date):
+        # 서로 떨어진 두 범위만 읽고, 두 쪽 모두 기존 날짜 인덱스를 사용한다.
+        extra_sql += ' UNION ALL ' + extra_sql
+        extra_params.extend([user_id, extra_range[0].isoformat(), extra_range[1].isoformat()])
+    extra_map = {r['date']: int(r['amount'] or 0) for r in conn.execute(extra_sql, extra_params).fetchall()}
 
     weeks = []
     prev_week_dict = None
@@ -563,7 +574,8 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
     return {
         'weeks': weeks,
         'this_week': this_week,
-        'chart_data': chart_data
+        'chart_data': chart_data,
+        'extra_by_date': extra_map
     }
 
 
@@ -681,9 +693,26 @@ def logout():
 def dashboard():
     user_id = session['user_id']
 
+    # Cache data, never HTML/session/flash messages. Production cache_coherence
+    # holds the user's RLock across this view and invalidation after every write.
+    today = korea_today().isoformat()
+    with _CACHE_LOCK:
+        entry = _USER_CACHE.get(user_id, {}).get('dashboard_context')
+        if not (entry and entry['day'] == today
+                and time.monotonic() - entry['ts'] < _DASHBOARD_CACHE_TTL):
+            entry = None
+
     now = time.time()
     conn = get_db()
     try:
+        # Preserve direct daily corrections, even outside application writes.
+        # One indexed read validates reuse; schedules/misc refresh on writes/TTL.
+        validated_rows = None
+        if entry:
+            month = entry['data']['current_month']
+            validated_rows = load_analysis_rows(conn, user_id, month['year'], month['month'])
+            if validated_rows == entry['source_rows']:
+                return render_template('dashboard.html', **entry['data'])
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
         rows = get_cached_monthly_summary(conn, user_id)
 
@@ -729,7 +758,8 @@ def dashboard():
         # [초고속 스마트 캐시 2] 당월 daily_profit 데이터 캐시 조회 (캐시 히트 시 DB 0ms)
         cur_year = current_month['year']
         cur_month = current_month['month']
-        analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
+        analysis_rows = (validated_rows if validated_rows is not None
+                         else load_analysis_rows(conn, user_id, cur_year, cur_month))
         cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
         schedule = get_business_schedule(conn, user_id)
 
@@ -768,7 +798,14 @@ def dashboard():
                                                month_summary_row=rows[-1] if rows else {})
         narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast,
                                                        latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows, comparison_rows=comparison_rows)
-        weekly_stats = get_recent_weeks_profit_stats(conn, user_id, rows=analysis_rows)
+        management_start = datetime.date(cur_year, cur_month, 1)
+        previous_start = (management_start - datetime.timedelta(days=1)).replace(day=1)
+        management_end = datetime.date(cur_year, cur_month, calendar.monthrange(cur_year, cur_month)[1])
+        weekly_stats = get_recent_weeks_profit_stats(conn, user_id, rows=analysis_rows,
+                                                    extra_range=(previous_start, management_end))
+        from management_analysis import build_management_review
+        management_review = build_management_review(analysis_rows, weekly_stats['extra_by_date'],
+                                                    cur_year, cur_month, schedule, as_of=korea_today())
 
         dashboard_ctx = {
             'current_month': current_month,
@@ -779,7 +816,8 @@ def dashboard():
             'yoy_day': yoy_day,
             'balance': balance,
             'narrative_briefing': narrative_briefing,
-            'weekly_stats': weekly_stats
+            'weekly_stats': weekly_stats,
+            'management_review': management_review
         }
 
         # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
@@ -788,6 +826,13 @@ def dashboard():
             if user_id not in _USER_CACHE:
                 _USER_CACHE[user_id] = {}
             _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
+            if comparison_rows is not None:
+                _USER_CACHE[user_id]['dashboard_context'] = {
+                    'day': today, 'ts': time.monotonic(), 'data': dashboard_ctx,
+                    'source_rows': analysis_rows}
+            else:
+                # Older fallback rows are outside the validation range.
+                _USER_CACHE[user_id].pop('dashboard_context', None)
     finally:
         conn.close()
 
