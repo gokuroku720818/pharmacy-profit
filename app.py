@@ -33,9 +33,8 @@ ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', '0') == '1'
 
 # ⚡ 사용자별 초고속 인메모리 스마트 캐시 (1인 전용 최적화: 1시간 TTL, 데이터 변경 시 즉시 갱신)
 _USER_CACHE = {}
-_CACHE_LOCK = threading.Lock()
+_CACHE_LOCK = threading.RLock()
 _CACHE_TTL = 3600  # 1시간 유효 (데이터 변경 시 invalidate_user_cache 즉시 호출로 실시간 정합성 보장)
-_DASHBOARD_CACHE_TTL = 60  # 분석 결과만 짧게 재사용; 저장·한국 날짜 변경 시 즉시 재계산
 
 
 def get_cached_monthly_summary(conn=None, user_id=None):
@@ -249,6 +248,31 @@ def get_cached_trend_extra(conn=None, user_id=None):
             conn.close()
 
 
+def get_cached_business_schedule(conn=None, user_id=None):
+    """사용자의 영업 일정 설정 캐시 (캐시 히트 시 DB 0ms 반환)"""
+    now = time.time()
+    with _CACHE_LOCK:
+        if user_id in _USER_CACHE:
+            entry = _USER_CACHE[user_id].get('business_schedule')
+            if entry and (now - entry['ts'] < _CACHE_TTL):
+                return entry['data']
+
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
+    try:
+        data = get_business_schedule(conn, user_id)
+        with _CACHE_LOCK:
+            if user_id not in _USER_CACHE:
+                _USER_CACHE[user_id] = {}
+            _USER_CACHE[user_id]['business_schedule'] = {'ts': now, 'data': data}
+        return data
+    finally:
+        if should_close:
+            conn.close()
+
+
 def get_cached_admin_stats():
     """관리자 콘솔 회원 목록 및 통계 캐시 (캐시 히트 시 DB 연결/쿼리 0회, 0ms 즉시 반환)"""
     now = time.time()
@@ -324,12 +348,13 @@ def warm_up_cache(user_id=1):
             with app.app_context():
                 conn = get_db()
                 try:
-                    now = datetime.datetime.now()
+                    k_today = korea_today()
                     get_cached_monthly_summary(conn, user_id)
-                    get_cached_current_month_dailies(conn, user_id, now.year, now.month)
+                    get_cached_current_month_dailies(conn, user_id, k_today.year, k_today.month)
                     get_cached_dow_avg(conn, user_id)
                     get_cached_calculator_settings(conn, user_id)
                     get_cached_trend_extra(conn, user_id)
+                    get_cached_business_schedule(conn, user_id)
                 finally:
                     conn.close()
         except Exception:
@@ -421,7 +446,7 @@ def load_analysis_rows(conn, user_id, year, month):
     ).fetchall()]
 
 
-def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None, extra_range=None):
+def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None):
     """
     최근 4주간 주차별 순익 현황 및 이번 주 이익 집계 (x월 1~4주차)
     - 한국 표준 목요일 기준 x월 n주차 명칭 자동 산출
@@ -444,20 +469,10 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None, extra_r
         ''', (user_id, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))).fetchall()
 
     date_map = {r['date']: r for r in rows}
-    # 경영 판단과 같은 날짜별 잡이익 조회를 공유한다. 추가 쿼리는 만들지 않는다.
-    extra_sql = '''
+    extra_map = {r['date']: int(r['amount'] or 0) for r in conn.execute('''
         SELECT date, SUM(amount) AS amount FROM extra_profit
         WHERE user_id = ? AND date BETWEEN ? AND ? GROUP BY date
-    '''
-    extra_start, extra_end = start_date, end_date
-    if extra_range and extra_range[0] <= end_date and extra_range[1] >= start_date:
-        extra_start, extra_end = min(start_date, extra_range[0]), max(end_date, extra_range[1])
-    extra_params = [user_id, extra_start.isoformat(), extra_end.isoformat()]
-    if extra_range and (extra_range[1] < start_date or extra_range[0] > end_date):
-        # 서로 떨어진 두 범위만 읽고, 두 쪽 모두 기존 날짜 인덱스를 사용한다.
-        extra_sql += ' UNION ALL ' + extra_sql
-        extra_params.extend([user_id, extra_range[0].isoformat(), extra_range[1].isoformat()])
-    extra_map = {r['date']: int(r['amount'] or 0) for r in conn.execute(extra_sql, extra_params).fetchall()}
+    ''', (user_id, start_date.isoformat(), end_date.isoformat())).fetchall()}
 
     weeks = []
     prev_week_dict = None
@@ -574,8 +589,7 @@ def get_recent_weeks_profit_stats(conn, user_id, num_weeks=4, rows=None, extra_r
     return {
         'weeks': weeks,
         'this_week': this_week,
-        'chart_data': chart_data,
-        'extra_by_date': extra_map
+        'chart_data': chart_data
     }
 
 
@@ -692,27 +706,9 @@ def logout():
 @login_required
 def dashboard():
     user_id = session['user_id']
-
-    # Cache data, never HTML/session/flash messages. Production cache_coherence
-    # holds the user's RLock across this view and invalidation after every write.
-    today = korea_today().isoformat()
-    with _CACHE_LOCK:
-        entry = _USER_CACHE.get(user_id, {}).get('dashboard_context')
-        if not (entry and entry['day'] == today
-                and time.monotonic() - entry['ts'] < _DASHBOARD_CACHE_TTL):
-            entry = None
-
     now = time.time()
     conn = get_db()
     try:
-        # Preserve direct daily corrections, even outside application writes.
-        # One indexed read validates reuse; schedules/misc refresh on writes/TTL.
-        validated_rows = None
-        if entry:
-            month = entry['data']['current_month']
-            validated_rows = load_analysis_rows(conn, user_id, month['year'], month['month'])
-            if validated_rows == entry['source_rows']:
-                return render_template('dashboard.html', **entry['data'])
         # [초고속 스마트 캐시 1] monthly_summary 전체를 캐시에서 조회 (캐시 히트 시 DB 0ms)
         rows = get_cached_monthly_summary(conn, user_id)
 
@@ -758,10 +754,9 @@ def dashboard():
         # [초고속 스마트 캐시 2] 당월 daily_profit 데이터 캐시 조회 (캐시 히트 시 DB 0ms)
         cur_year = current_month['year']
         cur_month = current_month['month']
-        analysis_rows = (validated_rows if validated_rows is not None
-                         else load_analysis_rows(conn, user_id, cur_year, cur_month))
+        analysis_rows = load_analysis_rows(conn, user_id, cur_year, cur_month)
         cur_month_rows = [r for r in analysis_rows if r['date'].startswith(f'{cur_year:04d}-{cur_month:02d}-')]
-        schedule = get_business_schedule(conn, user_id)
+        schedule = get_cached_business_schedule(conn, user_id)
 
         # [초고속 스마트 캐시 3] 요일별 평균 캐시 조회 (캐시 히트 시 DB 0ms)
         dow_avg = None
@@ -798,14 +793,7 @@ def dashboard():
                                                month_summary_row=rows[-1] if rows else {})
         narrative_briefing = get_ai_narrative_briefing(conn, user_id, current_month, forecast,
                                                        latest_row=latest_row, cur_cum=cur_cum, cur_month_rows=cur_month_rows, comparison_rows=comparison_rows)
-        management_start = datetime.date(cur_year, cur_month, 1)
-        previous_start = (management_start - datetime.timedelta(days=1)).replace(day=1)
-        management_end = datetime.date(cur_year, cur_month, calendar.monthrange(cur_year, cur_month)[1])
-        weekly_stats = get_recent_weeks_profit_stats(conn, user_id, rows=analysis_rows,
-                                                    extra_range=(previous_start, management_end))
-        from management_analysis import build_management_review
-        management_review = build_management_review(analysis_rows, weekly_stats['extra_by_date'],
-                                                    cur_year, cur_month, schedule, as_of=korea_today())
+        weekly_stats = get_recent_weeks_profit_stats(conn, user_id, rows=analysis_rows)
 
         dashboard_ctx = {
             'current_month': current_month,
@@ -816,23 +804,15 @@ def dashboard():
             'yoy_day': yoy_day,
             'balance': balance,
             'narrative_briefing': narrative_briefing,
-            'weekly_stats': weekly_stats,
-            'management_review': management_review
+            'weekly_stats': weekly_stats
         }
 
-        # 캐시 저장 (대시보드 컨텍스트 및 순익입력 화면 데이터 동시 사전적재)
+        # 캐시 저장 (순익입력 화면 데이터 사전적재)
         recent_preload = [dict(r) for r in reversed(cur_month_rows[-20:])] if cur_month_rows else []
         with _CACHE_LOCK:
             if user_id not in _USER_CACHE:
                 _USER_CACHE[user_id] = {}
             _USER_CACHE[user_id]['input_cache'] = {'ts': now, 'recent': recent_preload, 'yoy_day': yoy_day}
-            if comparison_rows is not None:
-                _USER_CACHE[user_id]['dashboard_context'] = {
-                    'day': today, 'ts': time.monotonic(), 'data': dashboard_ctx,
-                    'source_rows': analysis_rows}
-            else:
-                # Older fallback rows are outside the validation range.
-                _USER_CACHE[user_id].pop('dashboard_context', None)
     finally:
         conn.close()
 
@@ -1005,7 +985,7 @@ def calendar_view():
         dow_avg = None
         last_year_total = next((int(r['grand_total']) for r in m_rows if int(r['year']) == year - 1 and int(r['month']) == month), 0)
 
-        business_schedule = get_business_schedule(conn, user_id)
+        business_schedule = get_cached_business_schedule(conn, user_id)
         forecast = get_month_forecast(conn, user_id, year, month, entered_rows=rows,
             last_year_total=last_year_total, schedule=business_schedule,
             history_rows=analysis_rows, month_summary_row=month_summary or {})
@@ -1500,14 +1480,21 @@ def calculator():
 
     # ⚡ 캐시된 설정값 조회 (캐시 히트 시 DB 연결/쿼리 0회, 0.001초 반환)
     saved_settings = get_cached_calculator_settings(None, user_id)
-    if saved_settings:
-        settings = dict(saved_settings)
-    else:
-        settings = defaults
-
-    # ⚡ 현재 월 실적 조회 (원클릭 자동 불러오기용) - 캐시된 당월 일별 데이터 활용
-    today = datetime.date.today()
+    today = korea_today()
     cur_month_rows = get_cached_current_month_dailies(None, user_id, today.year, today.month)
+
+    if saved_settings is None or not cur_month_rows:
+        conn = get_db()
+        try:
+            if saved_settings is None:
+                saved_settings = get_cached_calculator_settings(conn, user_id)
+            if not cur_month_rows:
+                cur_month_rows = get_cached_current_month_dailies(conn, user_id, today.year, today.month)
+        finally:
+            conn.close()
+
+    settings = dict(saved_settings) if saved_settings else defaults
+
     disp = sum(int(r.get('dispensing_fee') or 0) for r in cur_month_rows)
     daily = sum(int(r.get('daily_net_profit') or 0) for r in cur_month_rows)
     nim = sum(int(r.get('non_insurance_margin') or 0) for r in cur_month_rows)
